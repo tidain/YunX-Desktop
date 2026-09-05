@@ -1,0 +1,51 @@
+# ================= YunX-Desktop .gitignore =================
+# 注意：gitignore 不支持行尾注释，说明一律写在独立注释行。
+# 原则：凡是从网络/本机可再生的产物一律忽略；保留源码 + 构建配置 + 少量必需资源。
+# 未忽略时仓库总大小约 2.5GB，忽略后仅几 MB。
+
+# ---- Gradle 构建缓存与产物（体积最大，必须忽略）----
+.gradle/
+# workspace 内 gradle 缓存（全部依赖 jar，约 800MB）
+.gradle-home/
+.kotlin/
+build/
+# 编译产物 / 安装器 / 便携版（约 340MB）
+desktop/build/
+
+# ---- 打包产物（重跑 portable-package.ps1 / installer-package.ps1 即可再生成）----
+# 便携版 app-image 与 zip（约 590MB）
+release/
+# jlink 运行时镜像中间目录（打包脚本正常结束会自删，异常中断时残留）
+release-runtime-tmp/
+# 便携版依赖 jar 合集（约 235MB）
+portable-libs/
+# jpackage 参数（含本机绝对路径）
+portable.args.txt
+
+# ---- 本机环境 / 信任库（机器特定，勿上传）----
+# 本机根证书导入的 cacerts + Gradle 发行版 zip（约 260MB）
+trust/
+# jpackage / 测试临时目录
+.tmp/
+# 冒烟测试数据目录（约 310MB）
+.test-data/
+# 导出的运行日志
+LOG/
+
+# ---- IDE / 系统文件 ----
+.idea/
+*.iml
+.vscode/
+.DS_Store
+Thumbs.db
+
+# ---- 日志与崩溃转储 ----
+*.log
+hs_err_pid*
+
+# ================= 重要：以下必须保留，不要忽略 =================
+# desktop/libs/material-color-utilities-1.0.0.jar
+#   —— 构建必需（build.gradle.kts 用 files("libs/...") 引用，仅 2.1MB）。
+#     它来自 material 1.14.0 AAR 解包，Maven 上无同名坐标，必须随仓库提交。
+# gradle/wrapper/gradle-wrapper.jar + gradlew + gradlew.bat —— Gradle Wrapper，必须提交。
+# gradle.properties / settings.gradle.kts / build.gradle.kts —— 构建配置，必须提交。

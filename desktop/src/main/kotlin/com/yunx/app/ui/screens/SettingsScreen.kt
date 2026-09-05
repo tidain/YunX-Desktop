@@ -73,6 +73,7 @@ import com.yunx.app.data.update.UpdateChecker
 import com.yunx.app.ui.SnackbarController
 import com.yunx.app.ui.components.FadeAlertDialog
 import com.yunx.app.util.DesktopActions
+import com.yunx.app.util.Log
 import com.yunx.app.util.LogExporter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -600,7 +601,7 @@ fun SettingsScreen(
                 try {
                     val content = runCatching {
                         withContext(Dispatchers.IO) { backupManager.export(password, onlyLoggedIn) }
-                    }.getOrNull()
+                    }.onFailure { Log.e("YunX-Auth", "export failed", it) }.getOrNull()
                     if (content == null) {
                         SnackbarController.show("导出失败")
                         return@launch

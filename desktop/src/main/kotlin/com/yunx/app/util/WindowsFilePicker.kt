@@ -60,9 +60,9 @@ object WindowsFilePicker {
     private const val VTB_GET_OPTIONS = 10
     private const val VTB_SET_FOLDER = 12
     private const val VTB_SET_FILE_NAME = 15
-    private const val VTB_SET_TITLE = 16
-    private const val VTB_GET_RESULT = 19
-    private const val VTB_SET_DEFAULT_EXTENSION = 20
+    private const val VTB_SET_TITLE = 17
+    private const val VTB_GET_RESULT = 20
+    private const val VTB_SET_DEFAULT_EXTENSION = 22
 
     // IShellItem vtable：5 = GetDisplayName，2 = Release
     private const val VTB_ITEM_GET_DISPLAY_NAME = 5

@@ -51,8 +51,8 @@ object WindowsFolderPicker {
     private const val VTB_SET_OPTIONS = 9
     private const val VTB_GET_OPTIONS = 10
     private const val VTB_SET_FOLDER = 12
-    private const val VTB_SET_TITLE = 16
-    private const val VTB_GET_RESULT = 19
+    private const val VTB_SET_TITLE = 17
+    private const val VTB_GET_RESULT = 20
 
     // IShellItem vtable：5 = GetDisplayName
     private const val VTB_ITEM_GET_DISPLAY_NAME = 5

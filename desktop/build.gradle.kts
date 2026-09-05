@@ -77,7 +77,7 @@ compose.desktop {
                 perUserInstall = true
             }
             packageName = "YunX-Desktop"
-            packageVersion = "1.1.1"
+            packageVersion = "1.1.2"
             // 注意：jpackage 参数文件解析不支持非 ASCII 描述（本机报 "Input length = 1"），描述保持纯英文
             description = "YunX-Desktop - netdisk share-link parser and high-speed downloader (desktop port of YunX for Android)"
             vendor = "YunX-Desktop"

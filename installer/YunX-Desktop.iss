@@ -1,4 +1,4 @@
-﻿; YunX-Desktop installer script (Inno Setup 6)
+; YunX-Desktop installer script (Inno Setup 6)
 ; Compiled by installer-package.ps1 with /DAppVersion=x.y.z
 ; Source: the portable output folder (release\YunX-Desktop\) which already contains
 ; the custom launcher and skiko native libs.
@@ -7,7 +7,7 @@
 #define AppNameEn "YunX-Desktop"
 #define AppExe "YunX-Desktop.exe"
 #ifndef AppVersion
-#define AppVersion "1.1.1"
+#define AppVersion "1.1.2"
 #endif
 
 [Setup]

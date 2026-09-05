@@ -1,4 +1,4 @@
-# YunX-Desktop 安装程序构建脚本
+﻿# YunX-Desktop 安装程序构建脚本
 # 流程：先复用 portable-package.ps1 生成免安装版（含自研启动器），再用 Inno Setup 压成单文件安装包
 # 输出：release\YunX-Desktop-setup-<版本>.exe（中文向导、可选安装目录、开始菜单/桌面快捷方式、可卸载）
 # 依赖：Inno Setup 6 缺失时自动下载并静默安装到 %LOCALAPPDATA%\Programs\Inno Setup 6

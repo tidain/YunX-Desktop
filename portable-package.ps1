@@ -1,4 +1,4 @@
-# YunX-Desktop 免安装打包脚本
+﻿# YunX-Desktop 免安装打包脚本
 # 输出: release\YunX-Desktop\ （整个文件夹可拷贝到任意位置，双击 YunX-Desktop.exe 运行）
 # 注意: 本文件必须保持 UTF-8 带 BOM 编码（PS 5.1 会把无 BOM 的 UTF-8 当 ANSI 解析，中文注释变乱码）
 # 注意: Gradle 会向 stderr 输出无害警告，不要把原生 stderr 当作致命错误处理

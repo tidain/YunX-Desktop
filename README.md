@@ -103,8 +103,8 @@ cd YunX-Desktop
 部分网盘平台的解析基于抓包分析与开源项目（如 alist）的协议研究整理，接口可能随官方调整而失效，请以实际运行结果为准。
 
 ## 更多
-- 项目仓库：https://github.com/tidain/yunx-desktop
-- 如果在使用中有任何问题或建议，欢迎提交 [Issue](https://github.com/tidain/yunx-desktop/issues)。
+- 项目仓库：https://github.com/tidain/YunX-Desktop
+- 如果在使用中有任何问题或建议，欢迎提交 [Issue](https://github.com/tidain/YunX-Desktop/issues)。
 
 ## Star History
 

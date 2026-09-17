@@ -71,7 +71,7 @@ $jpackageExe = Join-Path $JDK "bin\jpackage.exe"
   --type app-image `
   --dest release `
   --name YunX-Desktop `
-  --app-version 1.1.2 `
+  --app-version 1.2.0 `
   --vendor "YunX-Desktop" `
   --description "YunX-Desktop - netdisk share-link parser and high-speed downloader" `
   --input portable-libs `

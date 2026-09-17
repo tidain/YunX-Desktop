@@ -266,6 +266,13 @@ class DownloadManager(
 
     val tasks: Flow<List<DownloadTaskEntity>> = dao.observeAll()
 
+    /**
+     * 当前解析中的分享链接；解析开始时由 ResolveViewModel 写入，任务入队时若调用方未显式
+     * 传入 shareUrl 则用此值兜底填充 task.shareUrl，供「复制分享链接」右键菜单使用。
+     */
+    @Volatile
+    var currentShareUrl: String = ""
+
     /** 入队并立即开始下载 */
     suspend fun enqueue(
         url: String,
@@ -275,6 +282,8 @@ class DownloadManager(
         size: Long = -1L,
         /** 下载来源平台标识（按平台应用下载线程数设置）；通用/手动添加传空串 */
         platform: String = "",
+        /** 分享链接（用于右键菜单「复制分享链接」）；空串时用 currentShareUrl 兜底 */
+        shareUrl: String = "",
         /** 下载成功完成后的清理回调（如删除网盘临时转存文件）；失败/取消不触发 */
         onComplete: suspend () -> Unit = {}
     ): Long {
@@ -283,15 +292,23 @@ class DownloadManager(
             url.substringAfterLast('/').substringBefore('?')
                 .ifBlank { "download_${System.currentTimeMillis()}" }
         }
-        Log.d(TAG, "enqueue: origin=${LogRedactor.url(url)} fileName=$safeName headers=${headers.keys} size=$size")
-        val id = dao.insert(
-            DownloadTaskEntity(
-                url = url,
-                fileName = safeName,
-                requestHeadersJson = encodeHeaders(headers),
-                platform = platform
+        val effectiveShareUrl = shareUrl.ifBlank { currentShareUrl }
+        Log.d(TAG, "enqueue: origin=${LogRedactor.url(url)} fileName=$safeName headers=${headers.keys} size=$size shareUrl=$effectiveShareUrl")
+        val id = try {
+            dao.insert(
+                DownloadTaskEntity(
+                    url = url,
+                    fileName = safeName,
+                    requestHeadersJson = encodeHeaders(headers),
+                    platform = platform,
+                    shareUrl = effectiveShareUrl
+                )
             )
-        )
+        } catch (e: Exception) {
+            Log.e(TAG, "enqueue: dao.insert FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
+            throw e
+        }
+        Log.d(TAG, "enqueue: dao.insert returned id=$id, calling start()")
         // 保存请求头（Cookie/UA），暂停后恢复仍需携带
         if (headers.isNotEmpty()) taskHeaders[id] = headers
         if (size > 0) taskSizes[id] = size

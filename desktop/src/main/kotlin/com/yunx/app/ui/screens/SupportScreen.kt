@@ -2,6 +2,7 @@ package com.yunx.app.ui.screens
 
 import com.yunx.app.ui.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,25 +30,34 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.yunx.app.ui.SnackbarController
+import com.yunx.app.ui.components.FadeAlertDialog
 import com.yunx.app.util.DesktopActions
 
 /**
- * 支持开发页：展示捐赠信息与开源仓库入口（桌面版不提供二维码图片保存，改为链接支持）。
- * Material3 风格：渐变头部 + 卡片展示捐赠说明 + 感谢语 + 开源仓库按钮。
+ * 支持开发页：展示赞赏码与开源仓库入口。
+ * Material3 风格：渐变头部 + 卡片展示赞赏码（原项目 + 桌面移植） + 感谢语 + 开源仓库按钮。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -57,6 +67,9 @@ fun SupportScreen(
 ) {
     // 系统返回键 → 返回设置页
     BackHandler { onBack() }
+
+    // 赞赏码放大查看（点击小图弹出大图对话框，方便手机扫码）
+    var zoomedQr by remember { mutableStateOf<String?>(null) }
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -161,35 +174,63 @@ fun SupportScreen(
                     }
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    // 捐赠码占位（桌面版不内嵌二维码图片资源）
-                    Surface(
-                        modifier = Modifier.size(160.dp),
-                        shape = RoundedCornerShape(16.dp),
-                        color = MaterialTheme.colorScheme.surfaceContainerHighest
+                    // 赞赏码：左右两张并排，点击可放大方便扫码
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center
                     ) {
-                        Column(
-                            modifier = Modifier.fillMaxSize(),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.Favorite,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(48.dp)
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
+                        // 原安卓项目作者赞赏码
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Surface(
+                                modifier = Modifier
+                                    .size(140.dp)
+                                    .clickable { zoomedQr = "sponsor_cyqawa_weixin.png" },
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.surfaceContainerHighest
+                            ) {
+                                androidx.compose.foundation.Image(
+                                    painter = painterResource("sponsor_cyqawa_weixin.png"),
+                                    contentDescription = "原项目赞赏码（点击放大）",
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Fit
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
                             Text(
-                                text = "微信捐赠码",
-                                style = MaterialTheme.typography.labelMedium,
+                                text = "原安卓项目 (CYQawa)",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(20.dp))
+                        // 桌面版移植作者赞赏码
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Surface(
+                                modifier = Modifier
+                                    .size(140.dp)
+                                    .clickable { zoomedQr = "sponsor_tidain_weixin.png" },
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.surfaceContainerHighest
+                            ) {
+                                androidx.compose.foundation.Image(
+                                    painter = painterResource("sponsor_tidain_weixin.png"),
+                                    contentDescription = "桌面版赞赏码（点击放大）",
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Fit
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "桌面移植 (tidain)",
+                                style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(12.dp))
                     Text(
-                        text = "桌面版暂不提供二维码图片，可通过下方开源仓库入口支持项目开发",
+                        text = "点击赞赏码可放大查看，微信扫码赞赏",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center
@@ -254,8 +295,57 @@ fun SupportScreen(
                     modifier = Modifier.size(18.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("前往 GitHub 支持")
+                Text("原安卓项目仓库")
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // ---------- PC 移植版仓库入口 ----------
+            OutlinedButton(
+                onClick = {
+                    DesktopActions.openUrl("https://github.com/tidain/YunX-Desktop")
+                    SnackbarController.show("已打开 PC 移植版仓库")
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.OpenInNew,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("PC 移植版仓库")
             }
         }
+    }
+
+    // 赞赏码放大查看弹窗
+    zoomedQr?.let { resName ->
+        FadeAlertDialog(
+            visible = true,
+            onDismissRequest = { zoomedQr = null },
+            title = { Text("赞赏码") },
+            text = {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(360.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest
+                ) {
+                    androidx.compose.foundation.Image(
+                        painter = painterResource(resName),
+                        contentDescription = "赞赏码大图",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Fit
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { zoomedQr = null }) { Text("关闭") }
+            }
+        )
     }
 }

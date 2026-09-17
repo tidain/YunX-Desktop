@@ -4,6 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.yunx.app.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -11,6 +12,8 @@ import androidx.lifecycle.viewmodel.CreationExtras
 import kotlin.reflect.KClass
 import com.yunx.app.data.db.BookmarkDao
 import com.yunx.app.data.db.BookmarkEntity
+import com.yunx.app.data.db.LinkHistoryDao
+import com.yunx.app.data.db.LinkHistoryEntity
 import com.yunx.app.data.download.DownloadManager
 import com.yunx.app.data.download.DownloadPlatform
 import com.yunx.app.data.network.BaiduConstants
@@ -39,6 +42,7 @@ import com.yunx.app.data.repository.UCResolveRepository
 import com.yunx.app.data.repository.XunleiAccountRepository
 import com.yunx.app.data.repository.XunleiResolveRepository
 import com.yunx.app.ui.SnackbarController
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -67,7 +71,8 @@ class ResolveViewModel(
     private val pan123AccountRepository: Pan123AccountRepository,
     private val pan123ResolveRepository: Pan123ResolveRepository,
     private val downloadManager: DownloadManager,
-    private val bookmarkDao: BookmarkDao
+    private val bookmarkDao: BookmarkDao,
+    private val linkHistoryDao: LinkHistoryDao
 ) : ViewModel() {
 
     var uiState by mutableStateOf<ResolveUiState>(ResolveUiState.Idle)
@@ -517,6 +522,8 @@ class ResolveViewModel(
     fun startResolve(link: String, pwd: String?) {
         currentLink = link
         currentPwd = pwd
+        // 写入当前分享链接，供下载入队时兜底填充 task.shareUrl（右键菜单「复制分享链接」用）
+        downloadManager.currentShareUrl = link
         viewModelScope.launch {
             uiState = ResolveUiState.Loading
             val parsed = ShareLinkParser.parse(link)
@@ -537,12 +544,33 @@ class ResolveViewModel(
                     currentDirFid = currentDefaultDirFid()
                     dirStack.clear()
                     pathNames = emptyList()
+                    // 记录到链接历史（1 小时内同 URL 去重，失败不影响解析）
+                    runCatching { recordLinkHistory(s.title) }
                     loadFiles(s, currentDirFid, credential, repo)
                 }
                 .onFailure { e ->
                     uiState = ResolveUiState.Error(e.message ?: "解析失败")
                 }
         }
+    }
+
+    /**
+     * 记录解析历史到 link_history 表：同 URL 在 1 小时内已存在则跳过（避免重复解析污染历史）。
+     * 失败静默忽略（不阻断主流程）。
+     */
+    private suspend fun recordLinkHistory(title: String) {
+        val link = currentLink?.takeIf { it.isNotBlank() } ?: return
+        val existing = linkHistoryDao.search(link).first()
+        val latest = existing.maxByOrNull { it.createTime }
+        if (latest != null && System.currentTimeMillis() - latest.createTime < 60 * 60 * 1000) return
+        linkHistoryDao.insert(
+            LinkHistoryEntity(
+                url = link,
+                title = title.ifBlank { link },
+                platform = currentPlatform.name,
+                pwd = currentPwd.orEmpty()
+            )
+        )
     }
 
     /** 进入文件夹 */
@@ -616,6 +644,21 @@ class ResolveViewModel(
             )
             SnackbarController.show("已收藏到「$cat」")
         }
+    }
+
+    // ---------- 链接历史 ----------
+
+    /** 解析历史记录 Flow（供 LinkHistoryDialog 订阅展示） */
+    fun linkHistoryFlow() = linkHistoryDao.observeAll()
+
+    /** 删除单条历史记录 */
+    fun deleteLinkHistory(id: Long) {
+        viewModelScope.launch { linkHistoryDao.delete(id) }
+    }
+
+    /** 清空全部历史记录 */
+    fun clearLinkHistory() {
+        viewModelScope.launch { linkHistoryDao.clear() }
     }
 
     /**
@@ -775,8 +818,13 @@ class ResolveViewModel(
                 downloadError = "请先登录网盘"
                 return@launch
             }
-            enqueueDownload(link, credential)
-            downloadStarted = true
+            try {
+                enqueueDownload(link, credential)
+                downloadStarted = true
+            } catch (e: Exception) {
+                Log.e("ResolveVM", "startDownload failed: ${e.javaClass.simpleName}: ${e.message}", e)
+                downloadError = "下载启动失败：${e.message ?: e.javaClass.simpleName}"
+            }
         }
     }
 
@@ -809,7 +857,8 @@ class ResolveViewModel(
         private val pan123AccountRepository: Pan123AccountRepository,
         private val pan123ResolveRepository: Pan123ResolveRepository,
         private val downloadManager: DownloadManager,
-        private val bookmarkDao: BookmarkDao
+        private val bookmarkDao: BookmarkDao,
+        private val linkHistoryDao: LinkHistoryDao
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: KClass<T>, extras: CreationExtras): T {
@@ -822,7 +871,8 @@ class ResolveViewModel(
                 c139AccountRepository, c139ResolveRepository,
                 pan123AccountRepository, pan123ResolveRepository,
                 downloadManager,
-                bookmarkDao
+                bookmarkDao,
+                linkHistoryDao
             ) as T
         }
     }

@@ -74,6 +74,13 @@ class SettingsRepository {
             prefs.putBoolean("notification_show_speed", value)
         }
 
+    /** 后台剪贴板分享链接检测（主窗口失焦时轮询剪贴板，检测到网盘链接弹出提示） */
+    var clipboardLinkDetection: Boolean
+        get() = prefs.getBoolean("clipboard_link_detection", true)
+        set(value) {
+            prefs.putBoolean("clipboard_link_detection", value)
+        }
+
     /** 桌面图标样式（桌面版无 activity-alias，保留设置项占位） */
     var appIconVariant: Int
         get() = prefs.getInt("app_icon_variant", 0)

@@ -4,6 +4,7 @@ import com.yunx.app.data.db.UCAccountDao
 import com.yunx.app.data.db.UCAccountEntity
 import com.yunx.app.data.network.UCApi
 import com.yunx.app.data.network.UCConstants
+import com.yunx.app.util.CookieCleaner
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -64,6 +65,7 @@ class UCAccountRepository(
     }
 
     suspend fun logoutUC() {
+        CookieCleaner.clearCookiesForDomains(listOf("drive.uc.cn", "uc.cn"))
         dao.clear()
     }
 

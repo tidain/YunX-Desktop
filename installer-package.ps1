@@ -13,7 +13,7 @@ Set-Location $root
 Write-Host "Installer build working directory: $root" -ForegroundColor Cyan
 
 # 版本号需与 portable-package.ps1 中 jpackage 的 --app-version 保持一致
-$AppVersion = "1.1.2"
+$AppVersion = "1.2.0"
 
 # ---- [1/3] 生成免安装版（jpackage app-image + 自研启动器 + skiko 原生库）----
 Write-Host ""

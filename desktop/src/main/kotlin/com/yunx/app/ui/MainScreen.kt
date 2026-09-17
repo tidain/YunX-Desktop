@@ -70,6 +70,9 @@ import com.yunx.app.data.repository.UCAccountRepository
 import com.yunx.app.data.repository.UCResolveRepository
 import com.yunx.app.data.repository.XunleiAccountRepository
 import com.yunx.app.data.repository.XunleiResolveRepository
+import com.yunx.app.ui.clipboard.ClipboardLinkController
+import com.yunx.app.ui.clipboard.ClipboardLinkDetector
+import com.yunx.app.ui.clipboard.ClipboardLinkPopup
 import com.yunx.app.ui.components.OverlayDialogHost
 import com.yunx.app.ui.login.BaiduLoginScreen
 import com.yunx.app.ui.login.C139LoginScreen
@@ -314,7 +317,8 @@ fun MainScreen() {
             pan123Repository,
             pan123ResolveRepository,
             downloadManager,
-            db.bookmarkDao()
+            db.bookmarkDao(),
+            db.linkHistoryDao()
         )
     )
     val downloadViewModel: DownloadViewModel = viewModel(
@@ -646,6 +650,32 @@ fun MainScreen() {
         // 全局弹窗覆盖层（FadeAlertDialog）：窗口内直接绘制，零原生窗口开销。
         // 放在根部最后 → 绘制在所有内容（含全屏覆盖层）之上。
         OverlayDialogHost()
+
+        // 剪贴板分享链接检测器：主窗口失焦时若剪贴板有分享链接，触发右下角弹窗。
+        // Detector 在 Box 内部以绑定 MainScreen 生命周期；Popup 是独立顶层 Window。
+        // 可在「设置 → 用户体验」中关闭；切换 Tab 返回时重新读取设置值。
+        ClipboardLinkDetector(settings = settings)
+        ClipboardLinkPopup()
+
+        // 消费 ClipboardLinkController.openRequest：用户在弹窗点「打开」时切到解析页 + 启动解析 + 主窗口前台。
+        // ClipboardLinkController.openRequest 是 mutableStateOf（Compose State），但用轮询消费更可靠。
+        LaunchedEffect(Unit) {
+            while (true) {
+                kotlinx.coroutines.delay(200)
+                ClipboardLinkController.consumeOpen()?.let { d ->
+                    currentTab = MainTab.Resolve
+                    resolveViewModel.startResolve(d.text, d.parsed.pwd)
+                    // Windows 上 toFront() 单独调用不一定能夺取焦点，用 alwaysOnTop 瞬时切换确保置顶
+                    ClipboardLinkController.mainWindow?.let { w ->
+                        val wasOnTop = w.isAlwaysOnTop
+                        w.isAlwaysOnTop = true
+                        w.toFront()
+                        w.requestFocus()
+                        w.isAlwaysOnTop = wasOnTop
+                    }
+                }
+            }
+        }
         }
     }
 }

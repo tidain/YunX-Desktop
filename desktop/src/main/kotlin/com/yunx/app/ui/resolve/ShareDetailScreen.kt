@@ -31,6 +31,7 @@ import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.InsertDriveFile
 import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.SaveAlt
 import androidx.compose.material3.AlertDialog
@@ -112,6 +113,8 @@ fun ShareDetailScreen(
     onExit: () -> Unit,
     /** 列表「返回上一级」：子目录回上级，根目录回输入页 */
     onBack: () -> Unit,
+    /** 打开链接历史弹窗（与输入页共用，挂载在父层 ResolveScreen） */
+    onShowHistory: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val pathNames = viewModel.pathNames
@@ -188,6 +191,12 @@ fun ShareDetailScreen(
                                     text = "共 ${files.size} 项",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            IconButton(onClick = onShowHistory) {
+                                Icon(
+                                    imageVector = Icons.Outlined.History,
+                                    contentDescription = "解析历史"
                                 )
                             }
                             IconButton(onClick = { showAddBookmark = true }) {

@@ -43,8 +43,9 @@ object HttpClients {
     private fun buildApi(): OkHttpClient {
         return OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(60, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
+            .callTimeout(45, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
             .build()
     }
@@ -58,7 +59,7 @@ object HttpClients {
             .dispatcher(dispatcher)
             .connectionPool(
                 ConnectionPool(
-                    maxIdleConnections = 64,
+                    maxIdleConnections = 128,
                     keepAliveDuration = 5,
                     timeUnit = TimeUnit.MINUTES
                 )

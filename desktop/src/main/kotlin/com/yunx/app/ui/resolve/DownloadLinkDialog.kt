@@ -12,13 +12,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Download
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -29,12 +27,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.yunx.app.data.network.model.DownloadLink
 import com.yunx.app.ui.SnackbarController
-import com.yunx.app.ui.rememberGlobalSnackbarHostState
+import com.yunx.app.ui.components.FadeAlertDialog
 import com.yunx.app.util.DesktopActions
 
 /**
  * 下载直链弹窗：展示文件名与直链（长按直链复制），支持「开始下载」（分片多线程下载）。
  * 点「关闭」或弹窗外（管壁）关闭 = 放弃下载，由上层清理临时转存。
+ *
+ * 使用 FadeAlertDialog（窗口内覆盖层）而非原生 AlertDialog，避免桌面端原生窗口
+ * 阻塞 UI 线程和点击事件丢失问题。
  */
 @Composable
 fun DownloadLinkDialog(
@@ -43,9 +44,8 @@ fun DownloadLinkDialog(
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val snackbarHostState = rememberGlobalSnackbarHostState()
-
-    AlertDialog(
+    FadeAlertDialog(
+        visible = true,
         onDismissRequest = onDismiss,
         title = {
             Text(
@@ -96,8 +96,6 @@ fun DownloadLinkDialog(
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                // Dialog 内提示（AlertDialog 为独立窗口，需自带 Snackbar 宿主）
-                SnackbarHost(hostState = snackbarHostState)
             }
         },
         confirmButton = {
@@ -117,7 +115,6 @@ fun DownloadLinkDialog(
             TextButton(onClick = onDismiss) {
                 Text("关闭")
             }
-        },
-        modifier = modifier
+        }
     )
 }

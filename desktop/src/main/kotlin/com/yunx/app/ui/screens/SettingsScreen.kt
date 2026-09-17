@@ -20,6 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Article
 import androidx.compose.material.icons.outlined.Backup
 import androidx.compose.material.icons.outlined.ChevronRight
+import androidx.compose.material.icons.outlined.ContentPaste
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Layers
@@ -139,6 +140,7 @@ fun SettingsScreen(
     // 用户体验与系统适配：下载时阻止休眠 / 通知中心进度
     var keepAwake by remember { mutableStateOf(settingsRepo.keepAwakeWhileDownloading) }
     var showSpeed by remember { mutableStateOf(settingsRepo.notificationShowSpeed) }
+    var clipboardDetect by remember { mutableStateOf(settingsRepo.clipboardLinkDetection) }
 
     Column(
         modifier = modifier
@@ -250,6 +252,19 @@ fun SettingsScreen(
                 settingsRepo.notificationShowSpeed = showSpeed
             },
             trailing = { Switch(checked = showSpeed, onCheckedChange = null) }
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        SettingsItem(
+            icon = Icons.Outlined.ContentPaste,
+            title = "剪贴板分享链接检测",
+            description = if (clipboardDetect) "主窗口不在前台时检测剪贴板，发现网盘链接自动弹窗提示" else "关闭后台剪贴板检测",
+            onClick = {
+                clipboardDetect = !clipboardDetect
+                settingsRepo.clipboardLinkDetection = clipboardDetect
+            },
+            trailing = { Switch(checked = clipboardDetect, onCheckedChange = null) }
         )
 
         Spacer(modifier = Modifier.height(24.dp))

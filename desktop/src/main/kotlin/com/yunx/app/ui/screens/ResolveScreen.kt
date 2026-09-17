@@ -26,6 +26,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -59,6 +60,7 @@ import com.yunx.app.data.network.ShareLinkParser
 import com.yunx.app.data.network.SharePlatform
 import com.yunx.app.ui.SnackbarController
 import com.yunx.app.ui.resolve.DownloadLinkDialog
+import com.yunx.app.ui.resolve.LinkHistoryDialog
 import com.yunx.app.ui.resolve.ShareDetailScreen
 import com.yunx.app.ui.viewmodel.BaiduCloudViewModel
 import com.yunx.app.ui.viewmodel.C139CloudViewModel
@@ -100,6 +102,8 @@ fun ResolveScreen(
     var link by rememberSaveable { mutableStateOf("") }
     var pwd by rememberSaveable { mutableStateOf("") }
     var pwdEdited by rememberSaveable { mutableStateOf(false) }
+    // 链接历史弹窗可见性（输入页 / 详情页都可触发，故挂载在父层）
+    var showHistory by remember { mutableStateOf(false) }
 
     // 剪贴板分享链接提示状态：待提示的剪贴板文本 + 已忽略的文本
     // 用 rememberSaveable：切换 Tab 后返回仍保留（避免「忽略后切页回来又弹」）
@@ -175,6 +179,7 @@ fun ResolveScreen(
             quarkCloudViewModel = quarkCloudViewModel,
             xunleiCloudViewModel = xunleiCloudViewModel,
             baiduCloudViewModel = baiduCloudViewModel,
+            onShowHistory = { showHistory = true },
             c139CloudViewModel = c139CloudViewModel,
             ucCloudViewModel = ucCloudViewModel,
             pan123CloudViewModel = pan123CloudViewModel,
@@ -201,7 +206,8 @@ fun ResolveScreen(
                         pwd = ""
                         pwdEdited = false
                     },
-                    onClearPwd = { pwd = "" }
+                    onClearPwd = { pwd = "" },
+                    onShowHistory = { showHistory = true }
                 )
             }
         }
@@ -275,6 +281,23 @@ fun ResolveScreen(
             onDismiss = { viewModel.dismissDownloadDialog() }
         )
     }
+
+    // 链接历史弹窗（输入页与详情页都可触发）
+    LinkHistoryDialog(
+        visible = showHistory,
+        historyFlow = viewModel.linkHistoryFlow(),
+        onDismiss = { showHistory = false },
+        onSelect = { url, historyPwd ->
+            showHistory = false
+            // 复用剪贴板建议的解析路径：写入输入框 + 启动解析
+            link = url
+            pwd = historyPwd
+            pwdEdited = true
+            viewModel.startResolve(url, historyPwd.ifBlank { null })
+        },
+        onDelete = { viewModel.deleteLinkHistory(it) },
+        onClear = { viewModel.clearLinkHistory() }
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -288,7 +311,8 @@ private fun ResolveInputContent(
     pwd: String,
     onPwdChange: (String) -> Unit,
     onClearLink: () -> Unit,
-    onClearPwd: () -> Unit
+    onClearPwd: () -> Unit,
+    onShowHistory: () -> Unit
 ) {
     val isLoading = state is ResolveUiState.Loading
 
@@ -300,11 +324,23 @@ private fun ResolveInputContent(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Text(
-            text = "粘贴分享链接，一键解析分享内容",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "粘贴分享链接，一键解析分享内容",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f)
+            )
+            IconButton(onClick = onShowHistory) {
+                Icon(
+                    Icons.Outlined.History,
+                    contentDescription = "解析历史"
+                )
+            }
+        }
 
         OutlinedTextField(
             value = link,

@@ -79,6 +79,8 @@ data class DownloadTaskEntity(
     val cleanupId: String = "",
     /** 下载来源平台标识（用于按平台应用下载线程数设置）；通用/手动添加为空串 */
     val platform: String = "",
+    /** 原始分享链接（如 https://pan.baidu.com/s/xxx），用于右键"复制分享链接" */
+    val shareUrl: String = "",
     /** 下载完成时的平均速度（字节/秒）；完成态展示用，进行中为 0 */
     val avgSpeed: Long = 0,
     val createTime: Long = System.currentTimeMillis()
@@ -125,3 +127,17 @@ data class BookmarkEntity(
         )
     }
 }
+
+/** 网盘解析历史（解析过的分享链接，便于一键重新解析）。 */
+data class LinkHistoryEntity(
+    val id: Long = 0,
+    /** 完整分享链接 */
+    val url: String,
+    /** 分享标题（解析后回填；为空时展示回退为 url） */
+    val title: String = "",
+    /** 平台枚举名（QUARK/UC/XUNLEI/BAIDU/C139/PAN123），未知为空串 */
+    val platform: String = "",
+    /** 提取码（可选） */
+    val pwd: String = "",
+    val createTime: Long = System.currentTimeMillis()
+)

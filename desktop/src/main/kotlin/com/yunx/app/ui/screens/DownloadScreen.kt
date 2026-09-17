@@ -1,5 +1,3 @@
-@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
-
 package com.yunx.app.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
@@ -9,7 +7,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,6 +24,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Download
@@ -64,6 +62,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.PointerEvent
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerInputScope
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -71,6 +74,7 @@ import androidx.compose.ui.unit.dp
 import com.yunx.app.data.db.DownloadTaskEntity
 import com.yunx.app.data.download.DownloadStats
 import com.yunx.app.ui.SnackbarController
+import com.yunx.app.ui.components.FadeAlertDialog
 import com.yunx.app.ui.viewmodel.DownloadViewModel
 import com.yunx.app.util.DesktopActions
 
@@ -545,10 +549,8 @@ private fun DownloadSubTaskRow(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
-            .combinedClickable(
-                onClick = {},
-                onLongClick = { showMenu = true }
-            ),
+            .clickable(onClick = {})
+            .onRightClick { showMenu = true },
         shape = RoundedCornerShape(14.dp),
         color = MaterialTheme.colorScheme.surfaceContainer
     ) {
@@ -615,14 +617,29 @@ private fun DownloadSubTaskRow(
                             tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp)
                         )
                     }
-                    DownloadTaskEntity.STATUS_COMPLETED -> IconButton(
-                        onClick = { openSavedFile(task.savePath) },
-                        modifier = Modifier.size(32.dp)
-                    ) {
-                        Icon(
-                            Icons.Outlined.OpenInNew, contentDescription = "打开",
-                            tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp)
-                        )
+                    DownloadTaskEntity.STATUS_COMPLETED -> Row {
+                        IconButton(
+                            onClick = {
+                                if (!DesktopActions.revealFile(task.savePath)) {
+                                    SnackbarController.show("无法定位该文件")
+                                }
+                            },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                Icons.Outlined.Folder, contentDescription = "在文件夹中显示",
+                                tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        IconButton(
+                            onClick = { openSavedFile(task.savePath) },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                Icons.Outlined.OpenInNew, contentDescription = "打开",
+                                tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp)
+                            )
+                        }
                     }
                 }
                 // 删除
@@ -656,52 +673,16 @@ private fun DownloadSubTaskRow(
             }
         }
 
-        // 长按任务行弹出操作菜单（复制直链 / 重新下载 / 删除）
-        if (showMenu) {
-            AlertDialog(
-                onDismissRequest = { showMenu = false },
-                title = {
-                    Text(
-                        text = displayName,
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                },
-                text = {
-                    Column {
-                        TextButton(onClick = {
-                            showMenu = false
-                            DesktopActions.copyToClipboard(task.url)
-                            SnackbarController.show("直链已复制")
-                        }) {
-                            Icon(Icons.Outlined.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("复制直链")
-                        }
-                        TextButton(onClick = {
-                            showMenu = false
-                            onRedownload()
-                        }) {
-                            Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("重新下载")
-                        }
-                        TextButton(onClick = {
-                            showMenu = false
-                            onRemove()
-                        }) {
-                            Icon(Icons.Outlined.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("删除任务")
-                        }
-                    }
-                },
-                confirmButton = {
-                    TextButton(onClick = { showMenu = false }) { Text("取消") }
-                }
-            )
-        }
+        // 右键任务行弹出操作菜单（复制分享链接 / 复制直链 / 重新下载 / 删除）
+        TaskContextMenu(
+            visible = showMenu,
+            title = displayName,
+            shareUrl = task.shareUrl,
+            directUrl = task.url,
+            onDismiss = { showMenu = false },
+            onRedownload = onRedownload,
+            onRemove = onRemove
+        )
     }
 }
 
@@ -726,10 +707,8 @@ private fun DownloadTaskCard(
         modifier = Modifier
             .fillMaxWidth()
             .clip(MaterialTheme.shapes.large)
-            .combinedClickable(
-                onClick = {},
-                onLongClick = { showMenu = true }
-            ),
+            .clickable(onClick = {})
+            .onRightClick { showMenu = true },
         shape = MaterialTheme.shapes.large,
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainerLow
@@ -779,7 +758,18 @@ private fun DownloadTaskCard(
                     DownloadTaskEntity.STATUS_FAILED -> IconButton(onClick = onResume) {
                         Icon(Icons.Outlined.Refresh, contentDescription = "重试", tint = MaterialTheme.colorScheme.error)
                     }
-                                        DownloadTaskEntity.STATUS_COMPLETED -> Row {
+                    DownloadTaskEntity.STATUS_COMPLETED -> Row {
+                        IconButton(onClick = {
+                            if (!DesktopActions.revealFile(task.savePath)) {
+                                SnackbarController.show("无法定位该文件")
+                            }
+                        }) {
+                            Icon(
+                                Icons.Outlined.Folder,
+                                contentDescription = "在文件夹中显示",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
                         IconButton(onClick = {
                             openSavedFile(task.savePath)
                         }) {
@@ -862,52 +852,16 @@ private fun DownloadTaskCard(
             }
         }
 
-        // 长按任务卡弹出操作菜单（复制直链 / 重新下载 / 删除）
-        if (showMenu) {
-            AlertDialog(
-                onDismissRequest = { showMenu = false },
-                title = {
-                    Text(
-                        text = task.fileName,
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                },
-                text = {
-                    Column {
-                        TextButton(onClick = {
-                            showMenu = false
-                            DesktopActions.copyToClipboard(task.url)
-                            SnackbarController.show("直链已复制")
-                        }) {
-                            Icon(Icons.Outlined.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("复制直链")
-                        }
-                        TextButton(onClick = {
-                            showMenu = false
-                            onRedownload()
-                        }) {
-                            Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("重新下载")
-                        }
-                        TextButton(onClick = {
-                            showMenu = false
-                            onRemove()
-                        }) {
-                            Icon(Icons.Outlined.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("删除任务")
-                        }
-                    }
-                },
-                confirmButton = {
-                    TextButton(onClick = { showMenu = false }) { Text("取消") }
-                }
-            )
-        }
+        // 右键任务卡弹出操作菜单（复制分享链接 / 复制直链 / 重新下载 / 删除）
+        TaskContextMenu(
+            visible = showMenu,
+            title = task.fileName,
+            shareUrl = task.shareUrl,
+            directUrl = task.url,
+            onDismiss = { showMenu = false },
+            onRedownload = onRedownload,
+            onRemove = onRemove
+        )
     }
 }
 
@@ -1018,4 +972,109 @@ private fun AddDownloadDialog(
             TextButton(onClick = onDismiss) { Text("取消") }
         }
     )
+}
+
+/**
+ * 任务右键菜单（统一弹窗材质）：
+ * 复制分享链接 / 复制直链 / 重新下载 / 删除任务。
+ * 替代原先的 AlertDialog，遵循主仓库 FadeAlertDialog 弹窗规范
+ * （在窗口内以 OverlayDialogHost 渲染，不创建原生窗口、不阻塞 UI 线程）。
+ */
+@Composable
+private fun TaskContextMenu(
+    visible: Boolean,
+    title: String,
+    shareUrl: String,
+    directUrl: String,
+    onDismiss: () -> Unit,
+    onRedownload: () -> Unit,
+    onRemove: () -> Unit
+) {
+    FadeAlertDialog(
+        visible = visible,
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                ContextMenuRow(icon = Icons.Outlined.Link, label = "复制分享链接") {
+                    onDismiss()
+                    if (shareUrl.isNotBlank()) {
+                        DesktopActions.copyToClipboard(shareUrl)
+                        SnackbarController.show("分享链接已复制")
+                    } else {
+                        SnackbarController.show("获取分享链接失败")
+                    }
+                }
+                ContextMenuRow(icon = Icons.Outlined.ContentCopy, label = "复制直链") {
+                    onDismiss()
+                    DesktopActions.copyToClipboard(directUrl)
+                    SnackbarController.show("直链已复制")
+                }
+                ContextMenuRow(icon = Icons.Outlined.Refresh, label = "重新下载") {
+                    onDismiss(); onRedownload()
+                }
+                ContextMenuRow(
+                    icon = Icons.Outlined.Delete,
+                    label = "删除任务",
+                    tint = MaterialTheme.colorScheme.error
+                ) {
+                    onDismiss(); onRemove()
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        }
+    )
+}
+
+/** 右键菜单中的一行：图标 + 文字，左对齐，hover 时高亮 */
+@Composable
+private fun ContextMenuRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    tint: androidx.compose.ui.graphics.Color = androidx.compose.ui.graphics.Color.Unspecified,
+    onClick: () -> Unit
+) {
+    val contentColor = if (tint == androidx.compose.ui.graphics.Color.Unspecified) {
+        MaterialTheme.colorScheme.onSurface
+    } else tint
+    Surface(
+        onClick = onClick,
+        color = androidx.compose.ui.graphics.Color.Transparent,
+        contentColor = contentColor,
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+        ) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(modifier = Modifier.width(12.dp))
+            Text(label, style = MaterialTheme.typography.bodyLarge)
+        }
+    }
+}
+
+/**
+ * 右键点击修饰符：监听次级按键（右键）Press 事件。
+ * 替代 combinedClickable 的 onLongClick，桌面端右键更符合直觉。
+ */
+private fun Modifier.onRightClick(onRightClick: () -> Unit): Modifier = this.pointerInput(Unit) {
+    awaitPointerEventScope {
+        while (true) {
+            val event = awaitPointerEvent()
+            if (event.type == PointerEventType.Press && event.buttons.isSecondaryPressed) {
+                onRightClick()
+            }
+        }
+    }
 }

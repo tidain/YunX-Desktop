@@ -69,3 +69,11 @@ interface BookmarkDao {
     suspend fun updateCategory(id: Long, category: String)
     suspend fun delete(id: Long)
 }
+
+interface LinkHistoryDao {
+    fun observeAll(): Flow<List<LinkHistoryEntity>>
+    fun search(query: String): Flow<List<LinkHistoryEntity>>
+    suspend fun insert(entity: LinkHistoryEntity): Long
+    suspend fun delete(id: Long)
+    suspend fun clear()
+}

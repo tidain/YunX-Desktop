@@ -3,6 +3,7 @@ package com.yunx.app.data.repository
 import com.yunx.app.data.db.Pan123AccountDao
 import com.yunx.app.data.db.Pan123AccountEntity
 import com.yunx.app.data.network.Pan123Api
+import com.yunx.app.util.CookieCleaner
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -43,6 +44,7 @@ class Pan123AccountRepository(
     }
 
     suspend fun logout() {
+        CookieCleaner.clearCookiesForDomains(listOf("www.123pan.com", "123pan.com"))
         dao.clear()
     }
 }

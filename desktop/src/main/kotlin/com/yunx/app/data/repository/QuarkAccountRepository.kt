@@ -4,6 +4,7 @@ import com.yunx.app.data.db.QuarkAccountDao
 import com.yunx.app.data.db.QuarkAccountEntity
 import com.yunx.app.data.network.QuarkApi
 import com.yunx.app.data.network.QuarkConstants
+import com.yunx.app.util.CookieCleaner
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -62,8 +63,9 @@ class QuarkAccountRepository(
         }
     }
 
-    /** 退出登录：清除本地记录 */
+    /** 退出登录：清除 JCEF Cookie + 清除本地记录 */
     suspend fun logoutQuark() {
+        CookieCleaner.clearCookiesForDomains(listOf("pan.quark.cn", "quark.cn"))
         dao.clear()
     }
 

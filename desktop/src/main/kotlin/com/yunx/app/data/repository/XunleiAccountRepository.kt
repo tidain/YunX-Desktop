@@ -4,6 +4,7 @@ import com.yunx.app.data.db.XunleiAccountDao
 import com.yunx.app.data.db.XunleiAccountEntity
 import com.yunx.app.data.network.XunleiApi
 import com.yunx.app.data.network.XunleiLoginStep
+import com.yunx.app.util.CookieCleaner
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -90,6 +91,7 @@ class XunleiAccountRepository(
     }
 
     suspend fun logout() {
+        CookieCleaner.clearCookiesForDomains(listOf("pan.xunlei.com", "xunlei.com"))
         dao.clear()
     }
 }

@@ -28,6 +28,9 @@ fun C139LoginScreen(
             loginUrl = C139Constants.LOGIN_URL,
             domains = listOf("mail.10086.cn", "yun.139.com", ".10086.cn"),
             requiredKeys = listOf("Os_SSo_Sid", "RMKEY"),
+            // 139 网盘网页版（PC web）登录态仅下发 authorization，客户端版才下发 Os_SSo_Sid+RMKEY；
+            // 任一形态出现即视为登录成功，避免网页版登录后 Cookie 检测卡死无法「保存登录」
+            anyOfKeys = listOf("authorization"),
             platform = "C139",
             onSave = { cookie -> viewModel.saveC139Account(cookie) },
             onBack = onBack,

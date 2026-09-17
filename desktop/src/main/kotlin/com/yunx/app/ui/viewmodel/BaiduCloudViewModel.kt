@@ -209,10 +209,10 @@ class BaiduCloudViewModel(
 
     // ---------- 单文件操作 ----------
 
-    /** 百度下载直链的请求头（locatedownload 需 Cookie + netdisk UA） */
+    /** 百度下载直链的请求头（Cookie 用于鉴权；UA 用浏览器 UA，CDN 不校验 UA） */
     private fun downloadHeaders(cookie: String): Map<String, String> = mapOf(
         "Cookie" to cookie,
-        "User-Agent" to BaiduConstants.UA_NETDISK
+        "User-Agent" to BaiduConstants.UA_WEB
     )
 
     /**
@@ -313,7 +313,7 @@ class BaiduCloudViewModel(
                     size = file.fsize,
                     headers = mapOf(
                         "Cookie" to cookie(),
-                        "User-Agent" to BaiduConstants.UA_NETDISK
+                        "User-Agent" to BaiduConstants.UA_WEB
                     )
                 )
                 downloadLink = link // 弹下载确认弹窗（长按直链可复制）
@@ -571,18 +571,21 @@ class BaiduCloudViewModel(
 
     // ---------- 内部 ----------
 
-    /** 下拉刷新 */
+    /**
+     * 下拉刷新当前目录（即使是 Error 态也能刷新当前路径，避免用户必须退回根目录重试）。
+     * Loading 态直接忽略，避免叠加并发加载。
+     */
     fun refresh() {
         val current = uiState.value
-        if (current !is BaiduCloudUiState.Loaded) {
-            loadRoot()
-            return
-        }
+        if (current is BaiduCloudUiState.Loading) return
+        // Loaded → 取其 dirPath/pathNames；Error/Loading → 退回根目录字段
+        val dirPath = (current as? BaiduCloudUiState.Loaded)?.dirPath ?: "/"
+        val pathNames = (current as? BaiduCloudUiState.Loaded)?.pathNames ?: emptyList()
         refreshing = true
         viewModelScope.launch {
             try {
-                val files = api.listCloudFiles(current.dirPath, cookie())
-                _uiState.value = BaiduCloudUiState.Loaded(files, current.pathNames, current.dirPath)
+                val files = api.listCloudFiles(dirPath, cookie())
+                _uiState.value = BaiduCloudUiState.Loaded(files, pathNames, dirPath)
             } catch (e: Exception) {
                 cloudMessage = e.message ?: "刷新失败"
             } finally {
@@ -600,15 +603,25 @@ class BaiduCloudViewModel(
         }
     }
 
+    /**
+     * 加载指定目录：首次失败自动重试一次（500ms 后），仍失败置 Error 态。
+     * 对齐 fork 的容错策略，应对偶发的 errno=-6/限流瞬时抖动。
+     */
     private fun load(dirPath: String, pathNames: List<String>) {
         _uiState.value = BaiduCloudUiState.Loading
         viewModelScope.launch {
-            try {
-                val files = api.listCloudFiles(dirPath, cookie())
-                _uiState.value = BaiduCloudUiState.Loaded(files, pathNames, dirPath)
-            } catch (e: Exception) {
-                _uiState.value = BaiduCloudUiState.Error(e.message ?: "加载失败")
+            var lastError: Exception? = null
+            repeat(2) { attempt ->
+                try {
+                    val files = api.listCloudFiles(dirPath, cookie())
+                    _uiState.value = BaiduCloudUiState.Loaded(files, pathNames, dirPath)
+                    return@launch
+                } catch (e: Exception) {
+                    lastError = e
+                    if (attempt < 1) kotlinx.coroutines.delay(500)
+                }
             }
+            _uiState.value = BaiduCloudUiState.Error(lastError?.message ?: "加载失败")
         }
     }
 

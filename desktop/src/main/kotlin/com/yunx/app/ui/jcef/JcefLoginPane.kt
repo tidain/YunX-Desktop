@@ -63,6 +63,10 @@ private const val TAG = "YunX-JCEF-UI"
  * - SwingPanel 嵌入真实 Chromium（JCEF），加载网盘登录页；
  * - 每 1.5 秒轮询全局 Cookie，检测到必需键后提示「已检测到登录态」，一键保存；
  * - 底部提供「自动导入浏览器 Cookie」（方案 A）与「手动粘贴」备选。
+ *
+ * @param requiredKeys 必须全部出现的 Cookie 键名（与键名集合取交集，全命中才算登录态）
+ * @param anyOfKeys 候选键名（任一出现即视为登录态）；用于网页版仅下发 authorization、
+ *                  客户端版仅下发 Os_SSo_Sid 的双形态平台（如 139 网盘）兜底
  */
 @Composable
 fun JcefLoginPane(
@@ -73,7 +77,8 @@ fun JcefLoginPane(
     onSave: suspend (String) -> Boolean,
     onBack: () -> Unit,
     onSaved: () -> Unit,
-    onSwitchToPaste: () -> Unit
+    onSwitchToPaste: () -> Unit,
+    anyOfKeys: List<String> = emptyList()
 ) {
     val scope = rememberCoroutineScope()
     val app = JcefHolder.app()
@@ -116,7 +121,7 @@ fun JcefLoginPane(
     LaunchedEffect(browserHolder) {
         if (browserHolder == null) return@LaunchedEffect
         while (true) {
-            val cookie = withContext(Dispatchers.IO) { collectCookies(domains, requiredKeys) }
+            val cookie = withContext(Dispatchers.IO) { collectCookies(domains, requiredKeys, anyOfKeys) }
             if (cookie != null) detectedCookie = cookie
             delay(1500)
         }
@@ -299,8 +304,16 @@ private class BrowserHolder(val client: CefClient, val browser: CefBrowser)
  * JCEF 的 visitAllCookies 是**异步**的：CefCookieVisitor.visit 回调在 CEF IO 线程执行，
  * visitAllCookies 返回时回调可能尚未开始/完成。因此调用后必须等待一小段窗口
  * 让回调把结果写入（线程安全收集容器），再判断必需键。
+ *
+ * 登录态判定：[requiredKeys] 全命中 OR [anyOfKeys] 任一命中即视为有效。
+ * - requiredKeys 用于严格平台（如夸克：必须有 buser-u。
+ * - anyOfKeys 用于双形态平台（如 139：客户端下发 Os_SSo_Sid，网页版仅下发 authorization）。
  */
-private fun collectCookies(domains: List<String>, requiredKeys: List<String>): String? {
+private fun collectCookies(
+    domains: List<String>,
+    requiredKeys: List<String>,
+    anyOfKeys: List<String> = emptyList()
+): String? {
     return runCatching {
         val manager = CefCookieManager.getGlobalManager()
         val pairs = java.util.concurrent.ConcurrentLinkedQueue<Pair<String, String>>()
@@ -320,7 +333,10 @@ private fun collectCookies(domains: List<String>, requiredKeys: List<String>): S
             Log.d(TAG, "cookies for $domains: ${all.size} (keys=${all.map { it.first }.distinct()})")
         }
         val names = all.map { it.first }.toSet()
-        if (requiredKeys.any { !names.contains(it) }) return null
+        // 必需键全命中 OR anyOfKeys 任一命中；anyOfKeys 为空时仅看 requiredKeys
+        val requiredOk = requiredKeys.all { names.contains(it) }
+        val anyOk = anyOfKeys.isNotEmpty() && anyOfKeys.any { names.contains(it) }
+        if (!requiredOk && !anyOk) return null
         all.joinToString("; ") { "${it.first}=${it.second}" }
     }.getOrNull()
 }

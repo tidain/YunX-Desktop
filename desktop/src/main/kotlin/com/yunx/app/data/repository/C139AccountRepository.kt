@@ -3,6 +3,7 @@ package com.yunx.app.data.repository
 import com.yunx.app.data.db.C139AccountDao
 import com.yunx.app.data.db.C139AccountEntity
 import com.yunx.app.data.network.C139Constants
+import com.yunx.app.util.CookieCleaner
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
@@ -19,8 +20,9 @@ class C139AccountRepository(
 
     suspend fun getAccount(): C139AccountEntity? = dao.getAccount()
 
-    /** 退出登录：清理 WebView Cookie + 清除本地记录 */
+    /** 退出登录：清理 JCEF Cookie + 清除本地记录 */
     suspend fun logoutC139() {
+        CookieCleaner.clearCookiesForDomains(listOf("yun.139.com", "139.com"))
         dao.clear()
     }
 

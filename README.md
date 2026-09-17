@@ -90,7 +90,7 @@ cd YunX-Desktop
 如果觉得本项目对你有帮助，欢迎通过以下方式支持：
 
 - **GitHub Star**：给 [tidain/YunX-Desktop](https://github.com/tidain/YunX-Desktop) 点个 Star ⭐
-- **提交 Issue / PR**：发现 Bug 或有功能建议欢迎反馈
+- **提交 Issues**：发现 Bug 或有功能建议欢迎反馈
 - **赞赏**：应用内「支持开发」页面可扫码赞赏原安卓项目作者（CYQawa）与桌面移植作者（tidain），赞赏码可点击放大
 
 ## 免责声明

@@ -2,6 +2,8 @@
 
 [云析 YunX](https://github.com/CYQawa/YunX)（Android 网盘分享链接解析 + 高速下载器）的 **Windows 桌面移植**。
 
+> 原安卓项目仓库：[CYQawa/YunX](https://github.com/CYQawa/YunX) ｜ PC 移植版仓库：[tidain/YunX-Desktop](https://github.com/tidain/YunX-Desktop)
+
 粘贴网盘分享链接，浏览分享内容并直接高速下载文件 —— 无需手机，全程在电脑上完成。
 
 ## 支持平台
@@ -19,7 +21,9 @@
 
 - **分享链接解析**：识别夸克 / UC / 迅雷 / 百度 / 139 / 123 的分享链接，自动匹配提取码
 - **高速下载**：Range 分片并发 + 断点续传 + 自动重试 + 全局限速；弹性区按字节顺序分配，保证分片物理相邻、连接复用率稳定
-- **下载任务管理**：暂停 / 继续 / 删除 / 打开文件 / 在资源管理器中显示 / 复制直链
+- **下载任务管理**：暂停 / 继续 / 删除 / 打开文件 / 在资源管理器中显示 / 复制直链 / 复制分享链接
+- **剪贴板分享链接检测**：复制分享链接时右下角自动弹出提示卡片（可在设置中开关），点击一键打开解析
+- **解析链接历史**：自动记录解析过的分享链接（1 小时去重），支持搜索、复用提取码、删除与清空
 - **Windows 通知中心进度**：下载进度实时显示为 toast 进度条（多任务自动聚合 + 实时速度）
 - **阻止电脑休眠**：下载期间通过 `SetThreadExecutionState` 阻止系统睡眠，任务结束自动恢复
 - **网盘登录**（三种方式，任选其一）：
@@ -28,8 +32,9 @@
   - **手动粘贴 Cookie**（兜底）
   - 迅雷（账号密码 + 短信验证）、123（账号密码换 JWT）—— 纯 HTTP，直接表单登录
 - **认证备份**：用户口令派生密钥（PBKDF2）+ AES-GCM 加密 Cookie/JWT，导出为 `.yunx` 备份文件，跨设备恢复
+- **登出彻底清除 Cookie**：退出登录时通过 CEF 的 `delete` 标志清除该平台所有 Cookie，避免残留
 - **Windows 原生对话框**：下载目录选择、备份导入（选择文件）/ 导出（另存为）均为资源管理器同款样式（Vista+ COM IFileDialog）
-- **界面**：深色模式 + 自定义种子色（Monet 风格动态取色）+ 链接收藏
+- **界面**：深色模式 + 自定义种子色（Monet 风格动态取色）+ 链接收藏 + 弹窗统一窗口内覆盖层（无原生窗口阻塞）
 
 ## 构建与运行
 
@@ -72,6 +77,21 @@ cd YunX-Desktop
 2. **通知栏 / 锁屏保活**：按桌面习惯重新实现 —— 下载进度走 Windows 通知中心（toast 进度条）；「锁屏后保持下载」改为「下载时阻止电脑休眠」（偏好键 `keep_awake_downloading`，旧键 `keep_download_when_locked` 自动迁移）。
 3. **移除**：电池优化引导、动态取色（Material You）、应用图标切换、APK 更新检测、崩溃独立进程。
 4. **系统整合**：目录/文件选择、另存为均为 Windows 原生对话框；下载目录经 Known Folder API 解析（支持用户重定向过的「下载」位置）。
+5. **桌面专属体验（v1.2.0+）**：
+   - 剪贴板分享链接检测弹窗（设置可开关，失焦时右下角提示）
+   - 解析链接历史记录与复用
+   - 下载完成项「文件夹」按钮（`explorer /select` 定位文件）
+   - 右键菜单统一为窗口内弹窗材质，新增「复制分享链接」
+   - 登出通过 CEF `delete` 标志彻底清除平台 Cookie
+   - 百度网盘 API 连环修复（域名迁移 / bdstoken 自动刷新 / 限流重试 / 超时收紧）
+
+## 支持开发
+
+如果觉得本项目对你有帮助，欢迎通过以下方式支持：
+
+- **GitHub Star**：给 [tidain/YunX-Desktop](https://github.com/tidain/YunX-Desktop) 点个 Star ⭐
+- **提交 Issue / PR**：发现 Bug 或有功能建议欢迎反馈
+- **赞赏**：应用内「支持开发」页面可扫码赞赏原安卓项目作者（CYQawa）与桌面移植作者（tidain），赞赏码可点击放大
 
 ## 免责声明
 
@@ -103,7 +123,8 @@ cd YunX-Desktop
 部分网盘平台的解析基于抓包分析与开源项目（如 alist）的协议研究整理，接口可能随官方调整而失效，请以实际运行结果为准。
 
 ## 更多
-- 项目仓库：https://github.com/tidain/YunX-Desktop
+- 原安卓项目仓库：https://github.com/CYQawa/YunX
+- PC 移植版仓库：https://github.com/tidain/YunX-Desktop
 - 如果在使用中有任何问题或建议，欢迎提交 [Issue](https://github.com/tidain/YunX-Desktop/issues)。
 
 ## Star History

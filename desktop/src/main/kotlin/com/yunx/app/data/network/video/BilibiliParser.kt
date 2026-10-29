@@ -199,8 +199,8 @@ object BilibiliParser : VideoParser {
             .maxByOrNull { it.optInt("id") } ?: return null
 
         // 直链字段名有两种（baseUrl / base_url），且可能被下发成 JSON null（optString 会得到 "null"）
-        val videoUrl = bestVideo.dashUrl() ?: return null
-        val audioUrl = bestAudio.dashUrl() ?: return null
+        val videoUrl = bestVideo.dashPreferredUrl() ?: return null
+        val audioUrl = bestAudio.dashPreferredUrl() ?: return null
         return DashStream(videoUrl = videoUrl, audioUrl = audioUrl, quality = bestVideo.optInt("id"))
     }
 
@@ -208,6 +208,35 @@ object BilibiliParser : VideoParser {
         (optString("baseUrl").takeIf { it.isNotBlank() } ?: optString("base_url"))
             .takeIf { it.isNotBlank() && it != "null" }
             ?.let { httpsUrl(it) }
+
+    /**
+     * 该 DASH 流的全部直链：`baseUrl` 在前，`backupUrl` / `backup_url` 随后（去重、规范化 https）。
+     *
+     * B 站会给同一个流下发多个镜像（`upos-sz-mirror*.bilivideo.com` 为官方 CDN，
+     * 而 `baseUrl` 现在经常是 PCDN 节点 `*.mcdn.bilivideo.cn:8082`）。实测 PCDN 单连接
+     * 只有几十 KB/s，官方镜像几十 MB/s，所以不能只取 `baseUrl`。
+     */
+    private fun JSONObject.dashUrls(): List<String> {
+        val out = LinkedHashSet<String>()
+        dashUrl()?.let { out += it }
+        for (key in listOf("backupUrl", "backup_url")) {
+            val arr = optJSONArray(key) ?: continue
+            for (i in 0 until arr.length()) {
+                val raw = arr.optString(i)
+                if (raw.isBlank() || raw == "null") continue
+                httpsUrl(raw).takeIf { it.isNotBlank() }?.let { out += it }
+            }
+        }
+        return out.toList()
+    }
+
+    /** 首选直链：优先非 PCDN 的官方 CDN，全为 PCDN 时退回 baseUrl（保持原行为） */
+    private fun JSONObject.dashPreferredUrl(): String? =
+        dashUrls().let { urls -> urls.firstOrNull { !isPcdn(it) } ?: urls.firstOrNull() }
+
+    /** PCDN 节点（去中心化分发，单连接限速严重）：主机名里带 mcdn */
+    private fun isPcdn(url: String): Boolean =
+        url.substringAfter("://", "").substringBefore('/').contains("mcdn", ignoreCase = true)
 
     /**
      * 取「单文件 mp4」直链专供**在线预览**（DASH 分轨流没法直接喂给 JavaFX）。

@@ -129,6 +129,15 @@ private const val RANGE_WORKERS_CAP = 8
 /** DASH 分轨多连接下载：单个 Range 分块的最小字节数（太小的轨切块没有收益） */
 private const val DASH_CHUNK_MIN = 2L * 1024 * 1024
 
+/**
+ * DASH 分轨的并发上限（视频轨 / 音轨各自）。
+ *
+ * 与 [RANGE_WORKERS_CAP] 分开：那条 8 的上限是为网盘 CDN 的 Range 阈值设置的；
+ * 视频 CDN（B 站）没有这个问题，反而是「单连接限速」—— 实测 PCDN 节点单连接只有几十 KB/s，
+ * 8 路合计只有几百 KB/s。这里放宽到 32（仍尊重用户按平台的线程数设置）。
+ */
+private const val DASH_WORKERS_CAP = 32
+
 /** DASH 分轨最多切成多少块（只防极端超大文件把队列撑爆） */
 private const val DASH_MAX_CHUNKS = 1024
 
@@ -2414,7 +2423,7 @@ class DownloadManager(
      *     的 moof/trun 并重建时间轴，同样只重封装、不重编码。
      *   - Android 版两路可分片并行；这里同样是**两轨并行 + 每轨多连接 Range 并发**
      *     （B 站 CDN 单连接通常只有 1~2 MB/s，串行单连接是「下载慢」的主因）。
-     *     连接数取用户设置（按 VIDEO 平台）并封顶 [RANGE_WORKERS_CAP]，每块至少 [DASH_CHUNK_MIN]。
+     *     连接数取用户设置（按 VIDEO 平台）并封顶 [DASH_WORKERS_CAP]，每块至少 [DASH_CHUNK_MIN]。
      *     服务器忽略 Range 时自动回退单流整文件（[ChunkDownloader.downloadFull]）。
      *     ⇒ 本路径**不做分片级断点续传**：暂停/失败后临时文件一律丢弃，恢复时两路整文件重下。
      *
@@ -2453,7 +2462,7 @@ class DownloadManager(
             val downloaded = AtomicLong(0)
             val lastAt = AtomicLong(0L)
             // 两轨并行 + 每轨多连接：CDN 对单连接的限速是 B 站下载慢的主因
-            val workers = min(threadProvider(DownloadPlatform.VIDEO), RANGE_WORKERS_CAP).coerceAtLeast(1)
+            val workers = min(threadProvider(DownloadPlatform.VIDEO), DASH_WORKERS_CAP).coerceAtLeast(1)
             val speedRecorder = SpeedRecorder()
             // 下载阶段只映射到 0~90%：把最后 10% 留给合轨，否则合轨时进度会从 100% 往回跳
             fun reported(done: Long): Long = if (total > 0) minOf(done, total) * 9 / 10 else done

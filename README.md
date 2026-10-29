@@ -211,6 +211,9 @@ cd YunX-Desktop
 
 - 问题与建议：<https://github.com/tidain/YunX-Desktop/issues>
 
+## 友情链接
+- 云析的Docker社区移植版（基于本仓库修改，作为本仓库的下游分支）：[mu-zi-lee/YunX-Docker](https://github.com/mu-zi-lee/YunX-Docker)
+
 ## 贡献者
 
 <sub><sup>Contributors</sup></sub>

@@ -39,18 +39,29 @@ import com.yunx.app.ui.viewmodel.VideoResolveUiState
 import com.yunx.app.ui.viewmodel.VideoResolveViewModel
 
 /**
+ * 分轨媒体（哔哩哔哩 DASH：音视频分离）的下载方式。
+ *
+ * - [MERGE]：视频轨 + 音轨都下，合轨成一个 MP4（默认）
+ * - [AUDIO]：只下音轨（.m4a）
+ * - [VIDEO]：只下视频轨（.mp4，无声）
+ * - [SEPARATE]：两轨都下但**不合轨**，保存成两个独立文件
+ */
+enum class VideoStreamMode { MERGE, AUDIO, VIDEO, SEPARATE }
+
+/**
  * 视频解析页宿主：加载 / 错误 / 结果三种状态 + 全屏看图。
  *
  * 结果页本身是纯展示组件（[VideoResultSection]），状态与多选都留在 ViewModel，
  * 这样切 Tab 再回来不会丢选择。
  *
- * @param onDownload 下载回调：媒体（含 DASH 音轨 / 动图资源）交给 [com.yunx.app.data.download.DownloadManager]
+ * @param onDownload 下载回调：媒体（含 DASH 音轨 / 动图资源）交给 [com.yunx.app.data.download.DownloadManager]；
+ *   第二个参数是分轨媒体的下载方式（无分轨时恒为 [VideoStreamMode.MERGE]）
  */
 @Composable
 fun VideoResolveScreen(
     viewModel: VideoResolveViewModel,
     onBack: () -> Unit,
-    onDownload: (List<VideoMedia>) -> Unit,
+    onDownload: (List<VideoMedia>, VideoStreamMode) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val state = viewModel.uiState
@@ -60,10 +71,16 @@ fun VideoResolveScreen(
     var videoPreview by remember { mutableStateOf<VideoMedia?>(null) }
     // 动图（Live Photo）下载前的格式选择：非空表示等待用户在弹窗里选格式
     var pendingMotion by remember { mutableStateOf<List<VideoMedia>?>(null) }
+    // 分轨媒体（B 站 DASH）下载前的方式选择：非空表示等待用户选「合并 / 仅音频 / 仅视频 / 分别保存」
+    var pendingStream by remember { mutableStateOf<List<VideoMedia>?>(null) }
 
-    // 含动图的媒体先问格式，其余直接进下载队列
+    // 含动图先问格式；含分轨再问下载方式；其余直接进下载队列
     fun startDownload(medias: List<VideoMedia>) {
-        if (medias.any { it.motionUrl.isNotBlank() }) pendingMotion = medias else onDownload(medias)
+        when {
+            medias.any { it.motionUrl.isNotBlank() } -> pendingMotion = medias
+            medias.any { it.audioUrl.isNotBlank() } -> pendingStream = medias
+            else -> onDownload(medias, VideoStreamMode.MERGE)
+        }
     }
 
     BackHandler { onBack() }
@@ -145,9 +162,21 @@ fun VideoResolveScreen(
                 totalCount = medias.size,
                 onPick = { format ->
                     pendingMotion = null
-                    onDownload(medias.map { it.withMotionFormat(format) })
+                    onDownload(medias.map { it.withMotionFormat(format) }, VideoStreamMode.MERGE)
                 },
                 onDismiss = { pendingMotion = null }
+            )
+        }
+
+        // 分轨媒体（B 站 DASH）：下载前询问「合并 / 仅音频 / 仅视频 / 分别保存」
+        pendingStream?.let { medias ->
+            StreamModeDialog(
+                hasNonDash = medias.any { it.audioUrl.isBlank() },
+                onPick = { mode ->
+                    pendingStream = null
+                    onDownload(medias, mode)
+                },
+                onDismiss = { pendingStream = null }
             )
         }
     }
@@ -263,6 +292,83 @@ private fun MotionFormatOption(title: String, desc: String, onClick: () -> Unit)
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+        }
+    }
+}
+
+/**
+ * 分轨媒体下载方式弹窗（同样就地绘制，理由见 [MotionFormatDialog]）。
+ *
+ * 只在哔哩哔哩高清（DASH 音视频分离）时出现：合并 / 仅音频 / 仅视频 / 分别保存。
+ */
+@Composable
+private fun StreamModeDialog(
+    hasNonDash: Boolean,
+    onPick: (VideoStreamMode) -> Unit,
+    onDismiss: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.5f))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null
+            ) { onDismiss() },
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            shape = MaterialTheme.shapes.extraLarge,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            tonalElevation = 6.dp,
+            modifier = Modifier
+                .widthIn(min = 320.dp, max = 560.dp)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) {}
+        ) {
+            Column(modifier = Modifier.padding(24.dp)) {
+                Text("下载方式", style = MaterialTheme.typography.titleLarge)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = if (hasNonDash) {
+                        "该视频是 DASH 分轨（音视频分离）。所选里还有普通媒体，它们会按原方式下载。要下载哪部分？"
+                    } else {
+                        "该视频是 DASH 分轨（音视频分离）。要下载哪部分？"
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                MotionFormatOption(
+                    title = "音视频合并（默认）",
+                    desc = "视频轨 + 音轨都下载，自动合轨成一个 MP4",
+                    onClick = { onPick(VideoStreamMode.MERGE) }
+                )
+                MotionFormatOption(
+                    title = "仅下载音频",
+                    desc = "只下载音轨，保存为 .m4a（体积最小）",
+                    onClick = { onPick(VideoStreamMode.AUDIO) }
+                )
+                MotionFormatOption(
+                    title = "仅下载视频",
+                    desc = "只下载视频轨，保存为 .mp4（无声）",
+                    onClick = { onPick(VideoStreamMode.VIDEO) }
+                )
+                MotionFormatOption(
+                    title = "分别保存（不合并）",
+                    desc = "音轨、视频轨各存一个文件（-video.mp4 / -audio.m4a），方便自行剪辑",
+                    onClick = { onPick(VideoStreamMode.SEPARATE) }
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(onClick = onDismiss) { Text("取消") }
+                }
+            }
         }
     }
 }

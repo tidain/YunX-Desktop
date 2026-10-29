@@ -152,6 +152,7 @@ import com.yunx.app.ui.screens.StorageDirectoryScreen
 import com.yunx.app.ui.screens.OnboardingScreen
 import com.yunx.app.ui.screens.ResolveScreen
 import com.yunx.app.ui.screens.VideoResolveScreen
+import com.yunx.app.ui.screens.VideoStreamMode
 import com.yunx.app.ui.screens.SettingsScreen
 import com.yunx.app.ui.screens.SupportScreen
 import com.yunx.app.ui.screens.ThemeScreen
@@ -791,24 +792,83 @@ fun MainScreen(
             VideoResolveScreen(
                 viewModel = videoResolveViewModel,
                 onBack = { videoResolveText = null },
-                onDownload = { medias ->
+                onDownload = { medias, streamMode ->
                     val result = (videoResolveViewModel.uiState as? VideoResolveUiState.Success)?.result
                     if (result != null && medias.isNotEmpty()) {
                         scope.launch {
-                            medias.forEachIndexed { index, media ->
+                            val platform = DownloadPlatform.forVideoPlatform(result.platform)
+                            var queued = 0
+                            suspend fun enqueueOne(
+                                url: String,
+                                fileName: String,
+                                headers: Map<String, String>,
+                                size: Long,
+                                mergeAudioUrl: String = "",
+                                mergeAudioHeaders: Map<String, String> = emptyMap(),
+                                motionUrl: String = ""
+                            ) {
+                                if (url.isBlank()) return
                                 downloadManager.enqueue(
-                                    url = media.url,
-                                    fileName = VideoDownloads.fileNameFor(result, media, index, medias.size),
-                                    headers = media.headers,
-                                    size = media.size,
-                                    platform = DownloadPlatform.forVideoPlatform(result.platform),
+                                    url = url,
+                                    fileName = fileName,
+                                    headers = headers,
+                                    size = size,
+                                    platform = platform,
                                     // DASH 音轨 / 动图资源随任务落库，由 DownloadManager 决定是否合轨或合成
-                                    mergeAudioUrl = media.audioUrl,
-                                    mergeAudioHeaders = media.audioHeaders,
-                                    motionUrl = media.motionUrl
+                                    mergeAudioUrl = mergeAudioUrl,
+                                    mergeAudioHeaders = mergeAudioHeaders,
+                                    motionUrl = motionUrl
                                 )
+                                queued++
                             }
-                            SnackbarController.show("已加入下载队列（${medias.size} 项）")
+                            medias.forEachIndexed { index, media ->
+                                val baseName = VideoDownloads.fileNameFor(result, media, index, medias.size)
+                                val stem = baseName.substringBeforeLast('.', baseName)
+                                val ext = baseName.substringAfterLast('.', "mp4").ifBlank { "mp4" }
+                                val dash = media.audioUrl.isNotBlank()
+                                when {
+                                    // 非分轨媒体（或用户选「合并」）：保持原有行为
+                                    !dash || streamMode == VideoStreamMode.MERGE -> enqueueOne(
+                                        url = media.url,
+                                        fileName = baseName,
+                                        headers = media.headers,
+                                        size = media.size,
+                                        mergeAudioUrl = media.audioUrl,
+                                        mergeAudioHeaders = media.audioHeaders,
+                                        motionUrl = media.motionUrl
+                                    )
+                                    // 仅音频：只下音轨，存 .m4a
+                                    streamMode == VideoStreamMode.AUDIO -> enqueueOne(
+                                        url = media.audioUrl,
+                                        fileName = "$stem-audio.m4a",
+                                        headers = media.audioHeaders,
+                                        size = -1L
+                                    )
+                                    // 仅视频：只下视频轨（无声）
+                                    streamMode == VideoStreamMode.VIDEO -> enqueueOne(
+                                        url = media.url,
+                                        fileName = "$stem-video.$ext",
+                                        headers = media.headers,
+                                        size = media.size
+                                    )
+                                    // 分别保存：两轨各一个任务，不合轨
+                                    else -> {
+                                        enqueueOne(
+                                            url = media.url,
+                                            fileName = "$stem-video.$ext",
+                                            headers = media.headers,
+                                            size = media.size
+                                        )
+                                        enqueueOne(
+                                            url = media.audioUrl,
+                                            fileName = "$stem-audio.m4a",
+                                            headers = media.audioHeaders,
+                                            size = -1L
+                                        )
+                                    }
+                                }
+                            }
+                            SnackbarController.show("已加入下载队列（$queued 项）")
                             currentTab = MainTab.Download
                             videoResolveViewModel.reset()
                             videoResolveText = null

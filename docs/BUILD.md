@@ -36,11 +36,12 @@ cd YunX-Desktop
 应用内「关于页 / 更新检测」全部由它派生。**发版只需改这一个文件。**
 
 ```
-1.3.0            ← 第一行：版本号（必填）
-preview          ← 第二行（可选）：preview / beta = 预览版；缺省或写 stable = 正式版
+1.3.1            ← 第一行：版本号（必填）
+Beta=0           ← 第二行：Beta=1 预览版 / Beta=0 正式版（缺省 = 正式版）
 ```
 
-第二行写 `preview`（或 `beta`）时，构建出的 `APP_IS_PREVIEW = true`，关于页版本号旁会显示**黄色 Beta 标记**。
+第二行写 `Beta=1` 时，构建出的 `APP_IS_PREVIEW = true`，关于页版本号旁会显示**黄色 Beta 标记**。
+打包脚本只取第一行作为版本号，第二行不参与文件名 / jpackage 版本。
 
 启动器 exe 的版本资源（公司 `tidain`、版权 `Copyright (C) 2026 tidain`）也在打包时由该版本号生成。
 

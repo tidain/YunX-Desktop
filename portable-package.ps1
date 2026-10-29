@@ -15,8 +15,8 @@ Write-Host "Portable package working directory: $root" -ForegroundColor Cyan
 $JDK = Ensure-Jdk -RequireJPackage
 Write-Host "[OK] Using JDK: $JDK" -ForegroundColor Green
 
-# ---- 版本号单一来源：仓库根 version.txt（改版本只动这一个文件）----
-$AppVersion = (Get-Content (Join-Path $root "version.txt") -Raw).Trim()
+# ---- 版本号单一来源：仓库根 version.txt（改版本只动这一个文件；第二行 Beta=1/0 不参与版本号）----
+$AppVersion = ((Get-Content (Join-Path $root "version.txt") | Select-Object -First 1) -as [string]).Trim()
 if (-not $AppVersion) { throw "version.txt missing or empty (expect a version like 1.2.2)" }
 Write-Host "[OK] App version: $AppVersion" -ForegroundColor Green
 

@@ -12,8 +12,8 @@ $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $root
 Write-Host "Installer build working directory: $root" -ForegroundColor Cyan
 
-# 版本号单一来源：仓库根 version.txt（与 portable-package.ps1 / build.gradle.kts / .iss 同源）
-$AppVersion = (Get-Content (Join-Path $root "version.txt") -Raw).Trim()
+# 版本号单一来源：仓库根 version.txt（与 portable-package.ps1 / build.gradle.kts / .iss 同源；只取第一行）
+$AppVersion = ((Get-Content (Join-Path $root "version.txt") | Select-Object -First 1) -as [string]).Trim()
 if (-not $AppVersion) { throw "version.txt missing or empty (expect a version like 1.2.2)" }
 
 # ---- [1/3] 生成免安装版（jpackage app-image + 自研启动器 + skiko 原生库）----

@@ -521,9 +521,12 @@ private class FfplayPreviewController(
             }
             return
         }
-        val deadline = System.currentTimeMillis() + EMBED_TIMEOUT_MS
-        while (System.currentTimeMillis() < deadline) {
-            if (disposed || process !== p) return
+        val startedAt = System.currentTimeMillis()
+        var hinted = false
+        // 4K 直链要先建连接、探测流，ffplay 的窗口可能十几秒后才出现。
+        // 不能一到 5s 就放弃嵌入：放弃后窗口留在了屏幕外，用户看到的就是
+        // 「有声音、预览窗口黑屏、任务栏多一个 ffplay 图标」。
+        while (!disposed && process === p) {
             val child = FfplayWindowFx.findWindowForProcess(p.pid())
             val parent = FfplayManager.hostWindowHandle(PreviewFullscreen.window)
             val b = bounds
@@ -540,6 +543,13 @@ private class FfplayPreviewController(
                 }
                 return
             }
+            val waited = System.currentTimeMillis() - startedAt
+            if (!hinted && waited >= EMBED_TIMEOUT_MS) {
+                hinted = true
+                if (child == null) statusText = "正在等待播放窗口…"
+            }
+            // 给足时间慢慢等；进程已退出且始终没有窗口就没必要继续等了
+            if (waited >= EMBED_GIVE_UP_MS || (!p.isAlive && child == null)) break
             delay(60)
         }
         if (disposed || process !== p) return
@@ -624,6 +634,9 @@ private class FfplayPreviewController(
         )
 
         const val EMBED_TIMEOUT_MS = 5000L
+
+        /** 嵌入等待上限：大文件/慢直链下 ffplay 建窗很慢，最多等这么久才降级为独立窗口 */
+        const val EMBED_GIVE_UP_MS = 45_000L
         const val VK_P = 0x50
         const val VK_M = 0x4D
     }

@@ -536,7 +536,13 @@ private class FfplayPreviewController(
                 if (disposed || process !== p) return
                 embedded = ok
                 frozenFrame = null // 新窗口已就位，撤掉「最后一帧」遮罩
-                if (!ok) {
+                if (ok) {
+                    if (statusText.isNotEmpty()) statusText = ""
+                    Log.d(
+                        FFPLAY_TAG,
+                        "embed: 成功 hwnd=$child pid=${p.pid()} 等待 ${System.currentTimeMillis() - startedAt}ms"
+                    )
+                } else {
                     // 窗口是创建在屏幕外的，嵌入失败必须搬回可见区
                     FfplayWindowFx.revealWindow(child)
                     statusText = "FFplay 已在独立窗口播放（无法嵌入应用窗口）"
@@ -547,12 +553,22 @@ private class FfplayPreviewController(
             if (!hinted && waited >= EMBED_TIMEOUT_MS) {
                 hinted = true
                 if (child == null) statusText = "正在等待播放窗口…"
+                Log.d(FFPLAY_TAG, "embed: 已等待 ${EMBED_TIMEOUT_MS}ms 仍未拿到可嵌入的窗口 pid=${p.pid()}")
             }
-            // 给足时间慢慢等；进程已退出且始终没有窗口就没必要继续等了
-            if (waited >= EMBED_GIVE_UP_MS || (!p.isAlive && child == null)) break
+            // 等了很久还没窗口：先按「独立窗口」提示（不再转圈），但**继续在后台等**。
+            // 4K 直链偶发几十秒后才建窗，只要窗口一出现就会被嵌入，不必让用户重开预览。
+            if (embedded == null && waited >= EMBED_GIVE_UP_MS) {
+                embedded = false
+                frozenFrame = null
+                statusText = "FFplay 窗口出现较慢，仍在后台等待嵌入…"
+                Log.w(FFPLAY_TAG, "embed: 超过 ${EMBED_GIVE_UP_MS}ms 仍无窗口（继续重试）pid=${p.pid()}")
+            }
+            // 进程已退出且始终没有窗口就没必要继续等了
+            if (!p.isAlive && child == null) break
             delay(60)
         }
         if (disposed || process !== p) return
+        if (embedded == true) return
         embedded = false
         frozenFrame = null
         // 一直没等到可用的宿主/尺寸：窗口可能已经出现在屏幕外，搬回可见区

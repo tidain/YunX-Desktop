@@ -48,6 +48,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
@@ -70,6 +71,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.yunx.app.AppContext
 import com.yunx.app.data.backup.AuthBackupManager
@@ -105,17 +107,44 @@ private const val MIRROR_MODE_CUSTOM = "custom"
 /** 按平台下载线程数设置项 */
 private data class ThreadPlatform(val platform: String, val label: String)
 
-private val threadPlatforms = listOf(
-    ThreadPlatform(DownloadPlatform.QUARK, "夸克网盘"),
-    ThreadPlatform(DownloadPlatform.UC, "UC 网盘"),
-    ThreadPlatform(DownloadPlatform.XUNLEI, "迅雷网盘"),
-    ThreadPlatform(DownloadPlatform.BAIDU, "百度网盘"),
-    ThreadPlatform(DownloadPlatform.C139, "139 网盘"),
-    ThreadPlatform(DownloadPlatform.PAN123, "123 云盘"),
-    ThreadPlatform(DownloadPlatform.PAN115, "115 网盘"),
-    ThreadPlatform(DownloadPlatform.GUANGYA, "光鸭云盘"),
-    ThreadPlatform(DownloadPlatform.ILANZOU, "蓝奏云优享版"),
-    ThreadPlatform(DownloadPlatform.LANZOU, "蓝奏云"),
+/** 线程数设置的分组（网盘 / 视频平台 / 其他），分组内按两列或一列排布 */
+private data class ThreadPlatformSection(val title: String, val items: List<ThreadPlatform>)
+
+private val threadPlatformSections = listOf(
+    ThreadPlatformSection(
+        "网盘",
+        listOf(
+            ThreadPlatform(DownloadPlatform.QUARK, "夸克网盘"),
+            ThreadPlatform(DownloadPlatform.UC, "UC 网盘"),
+            ThreadPlatform(DownloadPlatform.XUNLEI, "迅雷网盘"),
+            ThreadPlatform(DownloadPlatform.BAIDU, "百度网盘"),
+            ThreadPlatform(DownloadPlatform.C139, "139 网盘"),
+            ThreadPlatform(DownloadPlatform.PAN123, "123 云盘"),
+            ThreadPlatform(DownloadPlatform.PAN115, "115 网盘"),
+            ThreadPlatform(DownloadPlatform.GUANGYA, "光鸭云盘"),
+            ThreadPlatform(DownloadPlatform.ILANZOU, "蓝奏云优享版"),
+            ThreadPlatform(DownloadPlatform.LANZOU, "蓝奏云"),
+        )
+    ),
+    ThreadPlatformSection(
+        "视频平台",
+        listOf(
+            ThreadPlatform(DownloadPlatform.VIDEO_BILIBILI, "哔哩哔哩"),
+            ThreadPlatform(DownloadPlatform.VIDEO_DOUYIN, "抖音"),
+            ThreadPlatform(DownloadPlatform.VIDEO_KUAISHOU, "快手"),
+            ThreadPlatform(DownloadPlatform.VIDEO_WEIBO, "微博"),
+            ThreadPlatform(DownloadPlatform.VIDEO_XHS, "小红书"),
+            ThreadPlatform(DownloadPlatform.VIDEO_ACFUN, "AcFun"),
+            ThreadPlatform(DownloadPlatform.VIDEO_PIXIV, "Pixiv"),
+        )
+    ),
+    ThreadPlatformSection(
+        "其他",
+        listOf(
+            ThreadPlatform(DownloadPlatform.GENERIC, "通用 / HTTP 下载"),
+            ThreadPlatform(DownloadPlatform.GITHUB, "GitHub 下载"),
+        )
+    ),
 )
 
 /**
@@ -152,8 +181,10 @@ fun SettingsScreen(
     var isExporting by remember { mutableStateOf(false) }
     var isImporting by remember { mutableStateOf(false) }
     // 按平台线程数：二级弹窗当前选择的平台
-    var selectedThreadPlatform by remember { mutableStateOf(threadPlatforms.first()) }
+    var selectedThreadPlatform by remember { mutableStateOf(threadPlatformSections.first().items.first()) }
     var showPlatformThreadDialog by remember { mutableStateOf(false) }
+    // 线程数弹窗的排布：一列 / 两列（右上角切换）
+    var threadGridTwoColumns by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     // 下载保存目录：本地状态驱动 UI 刷新，同时同步 Preferences
     val settingsRepo = remember { SettingsRepository() }
@@ -208,7 +239,7 @@ fun SettingsScreen(
         SettingsItem(
             icon = Icons.Outlined.Tune,
             title = "下载线程数",
-            description = "按网盘分别设置分片并发数（默认 32，最高 512）",
+            description = "按平台分别设置分片并发数（默认 32，最高 512）",
             onClick = { showThreadsDialog = true }
         )
 
@@ -792,62 +823,57 @@ fun SettingsScreen(
         )
     }
 
-    // 线程数选择弹窗（按平台）
-    FadeAlertDialog(
-        visible = showThreadsDialog,
-        onDismissRequest = { showThreadsDialog = false },
-        title = { Text("下载线程数") },
-        text = {
-            Column {
-                Text(
-                    text = "按网盘分别设置分片并发数；线程数不是越多越好，适当调整",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                threadPlatforms.forEach { item ->
-                    val current = settingsRepo.downloadThreadsFor(item.platform)
-                    val isXunlei = item.platform == DownloadPlatform.XUNLEI
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable(enabled = !isXunlei) {
+    // 线程数选择弹窗（按平台；右上角可在一列 / 两列之间切换）
+    if (showThreadsDialog) {
+        FadeAlertDialog(
+            visible = true,
+            onDismissRequest = { showThreadsDialog = false },
+            title = {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(text = "下载线程数", modifier = Modifier.weight(1f))
+                    TextButton(onClick = { threadGridTwoColumns = !threadGridTwoColumns }) {
+                        Text(if (threadGridTwoColumns) "一列" else "两列")
+                    }
+                }
+            },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 400.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    Text(
+                        text = "按平台分别设置分片并发数；线程数不是越多越好，适当调整",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    threadPlatformSections.forEach { section ->
+                        Text(
+                            text = section.title,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(top = 12.dp, bottom = 2.dp)
+                        )
+                        ThreadPlatformGrid(
+                            items = section.items,
+                            twoColumns = threadGridTwoColumns,
+                            currentOf = { settingsRepo.downloadThreadsFor(it) },
+                            onClick = { item ->
                                 selectedThreadPlatform = item
                                 showPlatformThreadDialog = true
                             }
-                            .padding(vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = item.label,
-                            style = MaterialTheme.typography.bodyLarge,
-                            modifier = Modifier.weight(1f)
                         )
-                        Text(
-                            text = if (isXunlei) "固定 8 线程" else "$current 线程",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = if (isXunlei) {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            } else {
-                                MaterialTheme.colorScheme.primary
-                            }
-                        )
-                        if (!isXunlei) {
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Icon(
-                                Icons.Outlined.ChevronRight,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
                     }
                 }
+            },
+            confirmButton = {
+                TextButton(onClick = { showThreadsDialog = false }) { Text("关闭") }
             }
-        },
-        confirmButton = {
-            TextButton(onClick = { showThreadsDialog = false }) { Text("取消") }
-        }
-    )
+        )
+    }
 
     // 单个平台线程数选择（二级弹窗）
     FadeAlertDialog(
@@ -1670,6 +1696,74 @@ private fun ProxyModeOption(label: String, selected: Boolean, onClick: () -> Uni
         RadioButton(selected = selected, onClick = onClick)
         Spacer(modifier = Modifier.width(8.dp))
         Text(label, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+/** 线程数设置网格：按 [twoColumns] 排成一列或两列（两列时最后一行补空占位，保持左对齐） */
+@Composable
+private fun ThreadPlatformGrid(
+    items: List<ThreadPlatform>,
+    twoColumns: Boolean,
+    currentOf: (String) -> Int,
+    onClick: (ThreadPlatform) -> Unit
+) {
+    val columns = if (twoColumns) 2 else 1
+    items.chunked(columns).forEach { rowItems ->
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            rowItems.forEach { item ->
+                ThreadPlatformCell(
+                    item = item,
+                    threads = currentOf(item.platform),
+                    modifier = Modifier.weight(1f),
+                    onClick = { onClick(item) }
+                )
+            }
+            repeat(columns - rowItems.size) { Spacer(modifier = Modifier.weight(1f)) }
+        }
+    }
+}
+
+/** 单个平台线程数卡片：平台名 + 当前线程数（迅雷固定 8，不可点） */
+@Composable
+private fun ThreadPlatformCell(
+    item: ThreadPlatform,
+    threads: Int,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    val fixed = item.platform == DownloadPlatform.XUNLEI
+    Surface(
+        modifier = modifier,
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+    ) {
+        Column(
+            modifier = Modifier
+                .clickable(enabled = !fixed, onClick = onClick)
+                .padding(horizontal = 12.dp, vertical = 10.dp)
+        ) {
+            Text(
+                text = item.label,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = if (fixed) "固定 $threads 线程" else "$threads 线程",
+                style = MaterialTheme.typography.bodySmall,
+                color = if (fixed) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.primary
+                }
+            )
+        }
     }
 }
 

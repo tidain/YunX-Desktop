@@ -1,5 +1,7 @@
 package com.yunx.app.data.download
 
+import com.yunx.app.data.network.video.VideoPlatform
+
 /**
  * 下载来源平台标识（用于按平台独立设置下载线程数）。
  * 字符串常量而非枚举：便于直接持久化到 Room 字段，也与各 ViewModel 解耦。
@@ -26,4 +28,24 @@ object DownloadPlatform {
     const val GENERIC = "generic"
     /** 视频平台（抖音/B站等）：任务来源展示与按平台线程数设置 */
     const val VIDEO = "video"
+
+    // 视频平台细分：每个平台可以单独设置线程数（旧的 VIDEO 任务仍按 VIDEO 的键兜底）
+    const val VIDEO_BILIBILI = "video_bilibili"
+    const val VIDEO_DOUYIN = "video_douyin"
+    const val VIDEO_KUAISHOU = "video_kuaishou"
+    const val VIDEO_WEIBO = "video_weibo"
+    const val VIDEO_XHS = "video_xhs"
+    const val VIDEO_ACFUN = "video_acfun"
+    const val VIDEO_PIXIV = "video_pixiv"
+
+    /** 视频解析平台 → 线程数设置用的平台标识 */
+    fun forVideoPlatform(platform: VideoPlatform): String = when (platform) {
+        VideoPlatform.BILIBILI -> VIDEO_BILIBILI
+        VideoPlatform.DOUYIN -> VIDEO_DOUYIN
+        VideoPlatform.KUAISHOU -> VIDEO_KUAISHOU
+        VideoPlatform.WEIBO -> VIDEO_WEIBO
+        VideoPlatform.XHS -> VIDEO_XHS
+        VideoPlatform.ACFUN -> VIDEO_ACFUN
+        VideoPlatform.PIXIV -> VIDEO_PIXIV
+    }
 }

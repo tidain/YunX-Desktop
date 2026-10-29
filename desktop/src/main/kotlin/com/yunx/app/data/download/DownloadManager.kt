@@ -2462,7 +2462,9 @@ class DownloadManager(
             val downloaded = AtomicLong(0)
             val lastAt = AtomicLong(0L)
             // 两轨并行 + 每轨多连接：CDN 对单连接的限速是 B 站下载慢的主因
-            val workers = min(threadProvider(DownloadPlatform.VIDEO), DASH_WORKERS_CAP).coerceAtLeast(1)
+            // 线程数按任务所属视频平台取（旧任务的 platform 可能是 "video"，同样能取到兜底值）
+            val workerPlatform = task.platform.ifBlank { DownloadPlatform.VIDEO }
+            val workers = min(threadProvider(workerPlatform), DASH_WORKERS_CAP).coerceAtLeast(1)
             val speedRecorder = SpeedRecorder()
             // 下载阶段只映射到 0~90%：把最后 10% 留给合轨，否则合轨时进度会从 100% 往回跳
             fun reported(done: Long): Long = if (total > 0) minOf(done, total) * 9 / 10 else done

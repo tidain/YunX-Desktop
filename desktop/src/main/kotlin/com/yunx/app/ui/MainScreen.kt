@@ -801,7 +801,7 @@ fun MainScreen(
                                     fileName = VideoDownloads.fileNameFor(result, media, index, medias.size),
                                     headers = media.headers,
                                     size = media.size,
-                                    platform = DownloadPlatform.VIDEO,
+                                    platform = DownloadPlatform.forVideoPlatform(result.platform),
                                     // DASH 音轨 / 动图资源随任务落库，由 DownloadManager 决定是否合轨或合成
                                     mergeAudioUrl = media.audioUrl,
                                     mergeAudioHeaders = media.audioHeaders,

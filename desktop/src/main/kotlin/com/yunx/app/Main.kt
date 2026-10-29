@@ -116,9 +116,13 @@ fun main(args: Array<String>) {
         JcefHolder.initBlocking()
     }
 
-    // 进程退出前尽力释放 JCEF
+    // 进程退出前：先把 WAL 落回主库（否则数据只留在 -wal 里，异常退出后可能整库丢失），
+    // 再尽力释放 JCEF
     Runtime.getRuntime().addShutdownHook(
-        Thread { JcefHolder.disposeQuietly() }
+        Thread {
+            com.yunx.app.data.db.AppDatabase.checkpointOnExit()
+            JcefHolder.disposeQuietly()
+        }
     )
 
     application {

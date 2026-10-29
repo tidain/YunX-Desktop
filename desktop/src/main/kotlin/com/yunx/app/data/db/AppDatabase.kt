@@ -56,6 +56,16 @@ class AppDatabase private constructor(private val conn: Connection) {
     fun bookmarkDao(): BookmarkDao = rawBookmark
     fun linkHistoryDao(): LinkHistoryDao = rawLinkHistory
 
+    /**
+     * 把 WAL 里的已提交事务全部落回主库并截断 WAL（进程退出前调用）。
+     * 这样即使下次启动时 -wal 出问题，主库里也有完整数据。
+     */
+    internal fun checkpoint() {
+        runCatching {
+            conn.createStatement().use { it.execute("PRAGMA wal_checkpoint(TRUNCATE)") }
+        }
+    }
+
     companion object {
         private const val TAG = "YunX-DB"
 
@@ -67,38 +77,23 @@ class AppDatabase private constructor(private val conn: Connection) {
                 instance ?: open().also { instance = it }
             }
 
+        /** 进程退出前调用：把 WAL 落回主库（库没打开过就什么都不做） */
+        fun checkpointOnExit() {
+            instance?.checkpoint()
+        }
+
         private fun open(): AppDatabase {
             Class.forName("org.sqlite.JDBC")
             // 数据库目录可在「设置 → 储存目录」改（默认＝数据根目录）；启动时已由 AppContext 解析好
             val dbFile = File(AppContext.dbDir, "yunx.db")
             dbFile.parentFile?.mkdirs()
 
-            // ==== TEMP DIAG (remove) ====
-            System.err.println("[YunX-DIAG] dataDir=" + AppContext.dataDir.absolutePath)
-            System.err.println("[YunX-DIAG] dbDir=" + AppContext.dbDir.absolutePath)
-            System.err.println("[YunX-DIAG] dbFile=" + dbFile.absolutePath + " exists=" + dbFile.exists() +
-                " isFile=" + dbFile.isFile + " len=" + dbFile.length() +
-                " canRead=" + dbFile.canRead() + " canWrite=" + dbFile.canWrite())
-            System.err.println("[YunX-DIAG] dbDir exists=" + AppContext.dbDir.exists() +
-                " isDir=" + AppContext.dbDir.isDirectory + " canWrite=" + AppContext.dbDir.canWrite())
-            System.err.println("[YunX-DIAG] userHome=" + System.getProperty("user.home") +
-                " userDir=" + System.getProperty("user.dir") +
-                " tmpdir=" + System.getProperty("java.io.tmpdir") +
-                " jnu=" + System.getProperty("sun.jnu.encoding") +
-                " fileEnc=" + System.getProperty("file.encoding"))
-            System.err.println("[YunX-DIAG] envYunxDataDir=" + System.getenv("YUNX_DESKTOP_DATA_DIR"))
-            runCatching {
-                val wal = File(AppContext.dbDir, "yunx.db-wal")
-                val created = wal.createNewFile()
-                System.err.println("[YunX-DIAG] createWal created=" + created + " exists=" + wal.exists())
-                runCatching { wal.delete() }
-            }.onFailure { System.err.println("[YunX-DIAG] createWal FAILED: " + it) }
-            // ==== END TEMP DIAG ====
-
             // 自愈：进程被强杀/崩溃后，WAL 的 -shm（共享内存索引）可能损坏或 mmap 失败
-            // （SQLITE_IOERR_SHMMAP），表现为应用启动即崩。-shm 可由 sqlite 随时重建
-            // （-wal 仍会回放，近期数据不丢）；若 -wal 本身也损坏，第二轮连 -wal 一起删，
-            // 恢复到最后一次 checkpoint 状态——远好于无法启动。
+            // （SQLITE_IOERR_SHMMAP），表现为应用启动即崩。-shm 由 sqlite 随时可重建，
+            // 删它不影响数据（-wal 仍会回放）。
+            // ★ 绝不再无条件删 -wal：WAL 模式下「主库可能只有 4KB、全部数据都在 -wal 里」
+            //   （进程被强杀 = 没做过 checkpoint），删掉 -wal 等于清空数据库。
+            //   真要绕开损坏的 -wal 时，先把 db 与 wal 备份到 yunx.db.bak-<时间戳> 再重命名。
             var lastError: Exception? = null
             repeat(3) { attempt ->
                 var conn: Connection? = null
@@ -108,6 +103,10 @@ class AppDatabase private constructor(private val conn: Connection) {
                         st.execute("PRAGMA journal_mode=WAL")
                         st.execute("PRAGMA busy_timeout=5000")
                         st.execute("PRAGMA synchronous=NORMAL")
+                        // 每次提交后就把 WAL 落回主库（本应用写入量很小，代价可忽略）。
+                        // 默认阈值是 1000 页，小库永远触发不到 —— 一旦进程被强杀，
+                        // 全部数据都还躺在 -wal 里，-wal 丢了就等于整库丢失（登录态消失的根因）。
+                        st.execute("PRAGMA wal_autocheckpoint=1")
                     }
                     DDL.forEach { sql ->
                         conn.createStatement().use { it.execute(sql) }
@@ -190,22 +189,23 @@ class AppDatabase private constructor(private val conn: Connection) {
                     lastError = e
                     runCatching { conn?.close() }
                     Log.e(TAG, "database open attempt ${attempt + 1} failed: ${e.message}")
-                    // ==== TEMP DIAG (remove) ====
-                    System.err.println("[YunX-DIAG] attempt=" + (attempt + 1) + " connNull=" + (conn == null))
-                    e.printStackTrace()
-                    // ==== END TEMP DIAG ====
                     runCatching {
+                        val dbPath = dbFile.absolutePath
                         when (attempt) {
                             0 -> {
-                                // 第一轮：仅删 -shm（保留 -wal 以回放近期事务）
-                                File("${dbFile.absolutePath}-shm").delete()
+                                // 第一轮：仅删 -shm（共享内存索引，sqlite 会重建；-wal 保留以回放）
+                                File("$dbPath-shm").delete()
                                 Log.w(TAG, "WAL shm removed, retrying open")
                             }
                             1 -> {
-                                // 第二轮：-wal 也损坏，一并删除回退到最后 checkpoint
-                                listOf("${dbFile.absolutePath}-shm", "${dbFile.absolutePath}-wal")
-                                    .forEach { runCatching { File(it).delete() } }
-                                Log.w(TAG, "WAL shm+wal removed, retrying open")
+                                // 第二轮：-wal 读不出来。**先备份再移走**，绝不直接删 ——
+                                // 主库可能只有 4KB，全部数据都在 -wal 里，删了就是清库。
+                                val ts = System.currentTimeMillis()
+                                runCatching { File(dbPath).copyTo(File("$dbPath.bak-$ts"), overwrite = true) }
+                                runCatching { File("$dbPath-wal").copyTo(File("$dbPath-wal.bak-$ts"), overwrite = true) }
+                                File("$dbPath-shm").delete()
+                                runCatching { File("$dbPath-wal").delete() }
+                                Log.w(TAG, "WAL unreadable; backed up as $dbPath.bak-$ts / -wal.bak-$ts and reopened")
                             }
                         }
                         Thread.sleep(300L * (attempt + 1))

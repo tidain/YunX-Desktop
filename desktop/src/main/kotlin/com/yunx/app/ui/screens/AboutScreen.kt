@@ -47,11 +47,13 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.yunx.app.APP_IS_PREVIEW
 import com.yunx.app.ui.BackHandler
 import com.yunx.app.ui.SnackbarController
 import com.yunx.app.data.update.UpdateChecker
@@ -180,11 +182,29 @@ private fun AppHeader(versionName: String) {
             fontWeight = FontWeight.SemiBold
         )
         Spacer(modifier = Modifier.height(4.dp))
-        Text(
-            text = "YunX-Desktop · v$versionName",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "YunX-Desktop · v$versionName",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            // 预览版标记：version.txt 第二行写了 preview / beta 时显示（黄色底，浅深色下都醒目）
+            if (APP_IS_PREVIEW) {
+                Spacer(modifier = Modifier.width(6.dp))
+                Surface(
+                    shape = MaterialTheme.shapes.small,
+                    color = Color(0xFFFFC107)
+                ) {
+                    Text(
+                        text = "Beta",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color(0xFF3A2A00),
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            }
+        }
         Spacer(modifier = Modifier.height(4.dp))
         Text(
             text = "网盘与视频链接解析 · 高速下载",

@@ -877,10 +877,15 @@ fun MainScreen(
         val release = runCatching {
             UpdateChecker.fetchLatestRelease(settings.acceptPrereleaseUpdate)
         }.getOrNull() ?: return@LaunchedEffect
-        if (UpdateChecker.compareVersions(release.tagName, UpdateChecker.currentVersion()) <= 0) {
+        val current = UpdateChecker.currentVersion()
+        if (UpdateChecker.compareVersions(release.tagName, current) <= 0) {
             return@LaunchedEffect
         }
-        if (AppContext.miscPrefs.get("ignored_version", null) == release.tagName) return@LaunchedEffect
+        // 强制更新不受「不再提示该版本」影响（用户之前忽略过也要拦）
+        val mandatory = release.isMandatoryFor(current)
+        if (!mandatory && AppContext.miscPrefs.get("ignored_version", null) == release.tagName) {
+            return@LaunchedEffect
+        }
         startupUpdateRelease = release
     }
 
@@ -1527,7 +1532,8 @@ fun MainScreen(
                         // （将来有更新的版本仍会提示，不是全局关闭更新检查）
                         AppContext.miscPrefs.put("ignored_version", release.tagName)
                         startupUpdateRelease = null
-                    }
+                    },
+                    mandatory = release.isMandatoryFor(UpdateChecker.currentVersion())
                 )
             }
         }

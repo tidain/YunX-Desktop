@@ -42,8 +42,59 @@ object UpdateChecker {
         val assets: List<Asset>,
         val publishedAt: String,
         /** 是否为 GitHub Pre-release：正式版通道恒为 false，预发布通道可能为 true */
-        val prerelease: Boolean = false
-    )
+        val prerelease: Boolean = false,
+        /** 发布说明里的「强制更新：1」；没写或为 0 = 不强制 */
+        val mandatory: Boolean = false,
+        /** 发布说明里的「最低强制更新版本」（如 v1.3.0）；没写/为空 = 不强制 */
+        val minMandatoryVersion: String? = null
+    ) {
+
+        /**
+         * 当前版本是否需要**强制更新**（不更新就不能继续使用）。
+         *
+         * 规则（与发布说明约定一致）：`强制更新 = 1` 且 **当前版本 ≥ 最低强制更新版本**
+         * 且 **当前版本 < 新版本**。两个字段缺任意一个 / 为空 → 一律不强制
+         * （老用户、过旧版本都不拦，避免把人锁死在没法升级的版本上）。
+         */
+        fun isMandatoryFor(currentVersion: String): Boolean {
+            if (!mandatory) return false
+            val min = minMandatoryVersion?.trim()?.takeIf { it.isNotEmpty() } ?: return false
+            return compareVersions(currentVersion, min) >= 0 &&
+                compareVersions(currentVersion, tagName) < 0
+        }
+    }
+
+    /** 发布说明里的 `> 强制更新：1`（行首允许 markdown 引用/列表符号） */
+    private val FORCE_FLAG_LINE = Regex("""^强制更新\s*[：:]\s*(\d+)$""")
+
+    /** 发布说明里的 `> 最低强制更新版本：v1.3.0` */
+    private val MIN_MANDATORY_LINE = Regex("""^最低强制更新版本\s*[：:]\s*v?(\d+(?:\.\d+)*)$""")
+
+    /**
+     * 从发布说明正文解析强制更新字段。
+     *
+     * 约定写成开头的一小段引用（见 Releases.md）：
+     * ```
+     * > 强制更新：1
+     * > 最低强制更新版本：v1.3.0
+     * ```
+     * 逐行匹配、允许行首 `>`/`*`/`-` 等 markdown 装饰；字段缺失或值非法时按「不强制」处理。
+     */
+    fun parseMandatory(body: String): Pair<Boolean, String?> {
+        var flag = false
+        var minVersion: String? = null
+        for (raw in body.lines()) {
+            val line = raw.trim().trimStart('>', '*', '-', '+', ' ').trim()
+            if (line.isEmpty()) continue
+            FORCE_FLAG_LINE.find(line)?.let { match ->
+                flag = match.groupValues[1].toIntOrNull() == 1
+            }
+            MIN_MANDATORY_LINE.find(line)?.let { match ->
+                minVersion = match.groupValues[1]
+            }
+        }
+        return flag to minVersion
+    }
 
     /** capsule-render 头图（波浪 banner）：只要 `<img>` 里出现这个域名就整段删掉（不依赖属性顺序） */
     private val CAPSULE_BANNER_REGEX =
@@ -152,13 +203,18 @@ object UpdateChecker {
                     }
                 }
             }
+            val rawBody = json.optString("body")
+            // 强制更新字段从**原始正文**解析（清洗只去头图/徽章，这里用原文更稳）
+            val (mandatory, minMandatoryVersion) = parseMandatory(rawBody)
             Release(
                 tagName = tag,
                 // 说明正文只在这一处清洗（更新弹窗读到的就是清洗后的那份，别再各清一遍）
-                body = cleanReleaseNotes(json.optString("body")),
+                body = cleanReleaseNotes(rawBody),
                 assets = assets,
                 publishedAt = json.optString("published_at"),
-                prerelease = json.optBoolean("prerelease")
+                prerelease = json.optBoolean("prerelease"),
+                mandatory = mandatory,
+                minMandatoryVersion = minMandatoryVersion
             )
         }.onFailure { e ->
             Log.e(TAG, "获取最新 Release 异常：${e.javaClass.simpleName}: ${e.message}", e)

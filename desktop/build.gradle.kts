@@ -89,15 +89,21 @@ kotlin {
 }
 
 // ---- 版本号单一来源：仓库根目录 version.txt（jpackage / 便携包 / 安装包 / 应用内版本全部由它派生）----
-val appVersion = rootProject.file("version.txt").readText().trim()
+// 格式：第一行版本号（如 1.3.0）；可选第二行 stable / preview（缺省 = stable，preview 时关于页显示 Beta 标记）
+val versionLines = rootProject.file("version.txt").readLines().map { it.trim() }.filter { it.isNotEmpty() }
+val appVersion = versionLines.firstOrNull().orEmpty()
 require(appVersion.matches(Regex("""\d+(\.\d+)*"""))) { "version.txt 内容非法: '$appVersion'" }
+val appPreviewFlag = versionLines.drop(1).firstOrNull()?.lowercase().orEmpty()
+val appIsPreview = appPreviewFlag in setOf("preview", "beta")
 
 // 生成 Kotlin 常量供 UpdateChecker 使用，避免应用内再维护一份硬编码
 val generateAppVersion by tasks.registering {
     val outDir = layout.buildDirectory.dir("generated/appVersion/kotlin")
     val version = appVersion
+    val isPreview = appIsPreview.toString()
     outputs.dir(outDir)
     inputs.property("version", version)
+    inputs.property("isPreview", isPreview)
     doLast {
         val pkgDir = outDir.get().asFile.resolve("com/yunx/app")
         pkgDir.mkdirs()
@@ -107,6 +113,9 @@ val generateAppVersion by tasks.registering {
             |
             |/** 由根目录 version.txt 生成，请勿手改 */
             |internal const val APP_VERSION = "$version"
+            |
+            |/** 是否为预览版（version.txt 第二行写了 preview / beta）；预览版在关于页显示 Beta 标记 */
+            |internal const val APP_IS_PREVIEW = $isPreview
             |""".trimMargin() + "\n"
         )
     }

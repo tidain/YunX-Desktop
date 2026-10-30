@@ -368,3 +368,255 @@ body {
   color: var(--sub);
   line-height: 1.5;
 }
+
+/* ---------- bilibili 专属卡片 ---------- */
+
+.bili-card {
+  margin: 10px 12px 0;
+  padding: 10px 12px 11px;
+  border-radius: 12px;
+  background: var(--brand-soft);
+  border: 1px solid var(--line);
+}
+
+.bili-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bili-badge {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--brand-fg);
+  background: var(--brand);
+  border-radius: 5px;
+  padding: 1px 6px;
+}
+
+.bili-bvid { font-size: 11px; color: var(--sub); }
+
+.bili-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.4;
+  margin-top: 6px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.bili-fields {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.bili-field { flex: 1 1 0; min-width: 0; display: block; }
+
+.bili-label {
+  display: block;
+  font-size: 11px;
+  color: var(--sub);
+  margin-bottom: 3px;
+}
+
+.bili-select {
+  width: 100%;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 5px 6px;
+  cursor: pointer;
+}
+
+.bili-btn {
+  width: 100%;
+  margin-top: 10px;
+  border: none;
+  background: var(--brand);
+  color: var(--brand-fg);
+  border-radius: 9px;
+  padding: 8px 12px;
+  font-size: 12.5px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.14s, opacity 0.14s;
+}
+
+.bili-btn:hover { background: var(--brand-dark); }
+
+.bili-btn[disabled] {
+  background: var(--switch-off);
+  color: var(--bg);
+  cursor: default;
+}
+
+.bili-hint {
+  font-size: 11px;
+  color: var(--sub);
+  line-height: 1.4;
+  margin-top: 6px;
+  min-height: 0;
+}
+
+.bili-hint:empty { display: none; }
+
+/* ---------- 分类筛选 ---------- */
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 14px 8px;
+}
+
+.chip {
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--sub);
+  font-size: 11px;
+  font-family: inherit;
+  line-height: 1;
+  padding: 5px 9px;
+  border-radius: 9px;
+  cursor: pointer;
+  transition: background 0.14s, color 0.14s, border-color 0.14s;
+}
+
+.chip:hover { color: var(--fg); }
+
+.chip.active {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: var(--brand-fg);
+  font-weight: 600;
+}
+
+/* ---------- 资源条目：缩略图 / 分类标签 / 预览按钮 ---------- */
+
+.item-thumb {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--card);
+  border: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.item-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.item-thumb span { font-size: 15px; color: var(--sub); line-height: 1; }
+
+.item-name.clickable { cursor: pointer; }
+.item-name.clickable:hover { color: var(--brand); }
+
+.tag.cat-image { color: #0f766e; background: rgba(13, 148, 136, 0.14); }
+.tag.cat-video { color: #7c3aed; background: rgba(124, 58, 237, 0.14); }
+.tag.cat-audio { color: #b45309; background: rgba(217, 119, 6, 0.16); }
+.tag.cat-document { color: #1d4ed8; background: rgba(37, 99, 235, 0.14); }
+.tag.cat-archive { color: #b91c1c; background: rgba(220, 38, 38, 0.14); }
+.tag.cat-program { color: #0369a1; background: rgba(2, 132, 199, 0.14); }
+.tag.cat-font { color: #6d28d9; background: rgba(109, 40, 217, 0.14); }
+.tag.cat-other { color: var(--sub); background: var(--card); }
+
+.mini-btn {
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--fg);
+  border-radius: 8px;
+  padding: 5px 9px;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.14s;
+}
+
+.mini-btn:hover { background: var(--hover); }
+
+/* ---------- 预览覆盖层 ---------- */
+
+.preview {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+}
+
+.preview-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  flex: 0 0 auto;
+}
+
+.preview-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.preview-close {
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--fg);
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.preview-close:hover { background: var(--hover); }
+
+.preview-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px;
+  background: var(--card);
+}
+
+.preview-body img,
+.preview-body video {
+  max-width: 100%;
+  max-height: 440px;
+  border-radius: 8px;
+  background: #000;
+}
+
+.preview-fail {
+  font-size: 12px;
+  color: var(--sub);
+  text-align: center;
+  padding: 20px;
+  line-height: 1.6;
+}

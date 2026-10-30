@@ -31,6 +31,31 @@
     </div>
   </header>
 
+  <section class="bili-card" id="bili-card" hidden>
+    <div class="bili-head">
+      <span class="bili-badge">bilibili</span>
+      <span class="bili-bvid" id="bili-bvid"></span>
+    </div>
+    <div class="bili-title" id="bili-title">正在读取视频信息…</div>
+    <div class="bili-fields">
+      <label class="bili-field">
+        <span class="bili-label">清晰度</span>
+        <select class="bili-select" id="bili-quality"></select>
+      </label>
+      <label class="bili-field">
+        <span class="bili-label">下载方式</span>
+        <select class="bili-select" id="bili-mode">
+          <option value="merge">普通下载（音视频合并）</option>
+          <option value="video">仅视频</option>
+          <option value="audio">仅音频</option>
+          <option value="separate">视频＋音频（不合并）</option>
+        </select>
+      </label>
+    </div>
+    <button type="button" class="bili-btn" id="bili-download">交给云析下载</button>
+    <div class="bili-hint" id="bili-hint"></div>
+  </section>
+
   <section class="card">
     <label class="row">
       <div class="row-text">
@@ -69,6 +94,8 @@
     <span class="count" id="count">0</span>
   </section>
 
+  <div class="filters" id="filters" hidden></div>
+
   <div class="list" id="list">
     <div class="empty">
       <div class="empty-title">暂无嗅探到的资源</div>
@@ -79,6 +106,14 @@
   <footer class="foot">
     <span id="hint">资源列表仅在本机与云析之间传递，不上传任何数据。</span>
   </footer>
+
+  <div class="preview" id="preview" hidden>
+    <div class="preview-bar">
+      <span class="preview-name" id="preview-name"></span>
+      <button type="button" class="preview-close" id="preview-close" aria-label="关闭">×</button>
+    </div>
+    <div class="preview-body" id="preview-body"></div>
+  </div>
 
   <script src="popup.js"></script>
 </body>

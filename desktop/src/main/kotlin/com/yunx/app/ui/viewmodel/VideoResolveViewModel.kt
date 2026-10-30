@@ -8,6 +8,8 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.CreationExtras
 import com.yunx.app.data.db.AppDatabase
+import com.yunx.app.data.network.video.VideoLinkParser
+import com.yunx.app.data.network.video.VideoParseErrorKind
 import com.yunx.app.data.network.video.VideoParseException
 import com.yunx.app.data.network.video.VideoParseResult
 import com.yunx.app.data.network.video.userMessage
@@ -45,15 +47,19 @@ class VideoResolveViewModel internal constructor(
 
     private var lastInput: String? = null
 
-    fun resolve(text: String) {
+    /** 上次解析所用的清晰度（null = 平台默认）；重试 / 切档后重解析时沿用 */
+    private var lastQn: Int? = null
+
+    fun resolve(text: String, qualityQn: Int? = null) {
         val trimmed = text.trim()
         if (trimmed.isBlank()) return
         lastInput = trimmed
+        lastQn = qualityQn
         uiState = VideoResolveUiState.Loading
         selected = emptySet()
         viewModelScope.launch {
             uiState = try {
-                val parsed = repository.parse(trimmed)
+                val parsed = repository.parse(trimmed, qualityQn)
                 if (parsed == null) {
                     VideoResolveUiState.Error("未识别到视频链接")
                 } else {
@@ -67,14 +73,29 @@ class VideoResolveViewModel internal constructor(
         }
     }
 
+    /** 切换清晰度：按当前链接（同一输入）以新档位重新解析 */
+    fun selectQuality(qn: Int) {
+        val text = lastInput ?: return
+        if (qn == (uiState as? VideoResolveUiState.Success)?.result?.selectedQn) return
+        resolve(text, qn)
+    }
+
     fun retry() {
-        lastInput?.let { resolve(it) }
+        lastInput?.let { resolve(it, lastQn) }
     }
 
     fun reset() {
         uiState = VideoResolveUiState.Idle
         selected = emptySet()
         lastInput = null
+        lastQn = null
+    }
+
+    /** 供浏览器插件调用：按 BVID（+可选清晰度）静默解析，不经过界面输入框 */
+    suspend fun parseForPlugin(bvid: String, qualityQn: Int?): VideoParseResult {
+        val link = VideoLinkParser.parse("https://www.bilibili.com/video/$bvid")
+            ?: throw VideoParseException(VideoParseErrorKind.NOT_FOUND, "无效的 BVID：$bvid")
+        return repository.parse(link, qualityQn)
     }
 
     fun toggleSelect(index: Int) {

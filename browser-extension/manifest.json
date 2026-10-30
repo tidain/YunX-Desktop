@@ -10,7 +10,8 @@
     "tabs",
     "webRequest",
     "cookies",
-    "contextMenus"
+    "contextMenus",
+    "scripting"
   ],
   "host_permissions": [
     "<all_urls>",

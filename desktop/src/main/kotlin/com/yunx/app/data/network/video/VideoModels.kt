@@ -4,6 +4,14 @@ package com.yunx.app.data.network.video
 enum class VideoMediaKind { VIDEO, IMAGE, AUDIO }
 
 /**
+ * 一档可选清晰度：[qn] 是平台内部编号（B站 qn），[label] 是展示文案（如 `1080P 高清`）。
+ *
+ * 目前只有哔哩哔哩会填（见 `BilibiliParser`）；其它平台拿不到清晰度列表，[VideoParseResult.qualities]
+ * 为空时解析页不显示清晰度选择条。
+ */
+data class VideoQuality(val qn: Int, val label: String)
+
+/**
  * 一条可下载的媒体。
  *
  * 与网盘的 `DownloadLink` 的区别：这里**逐个媒体自带请求头**——各平台的直链往往要求特定的
@@ -80,7 +88,11 @@ data class VideoParseResult(
      * 空串 = 一切正常。界面据此**弹一次**提示即可，不要去改 [medias] 里已有的地址 ——
      * 降级与否在解析阶段就已定好，这里只是把原因告诉用户。
      */
-    val notice: String = ""
+    val notice: String = "",
+    /** 可选清晰度档位（目前只有 B 站会填；为空表示该平台不支持切换清晰度） */
+    val qualities: List<VideoQuality> = emptyList(),
+    /** 本次解析实际采用的清晰度编号（用于在清晰度条里标出当前档位）；0 = 未知 */
+    val selectedQn: Int = 0
 ) {
     val videoCount: Int get() = medias.count { it.kind == VideoMediaKind.VIDEO }
     val imageCount: Int get() = medias.count { it.kind == VideoMediaKind.IMAGE }

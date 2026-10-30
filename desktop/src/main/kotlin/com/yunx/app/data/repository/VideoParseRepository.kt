@@ -9,6 +9,7 @@ import com.yunx.app.data.network.video.VideoParseException
 import com.yunx.app.data.network.video.VideoParseResult
 import com.yunx.app.data.network.video.VideoParsers
 import com.yunx.app.data.network.video.VideoPlatform
+import com.yunx.app.data.network.video.QualitySelectableParser
 import okhttp3.OkHttpClient
 
 /**
@@ -26,13 +27,18 @@ class VideoParseRepository internal constructor(
 ) {
 
     /** 从任意文本里识别并解析视频；识别不到视频链接返回 null（调用方据此回退到网盘解析） */
-    suspend fun parse(text: String): VideoParseResult? {
+    suspend fun parse(text: String, qualityQn: Int? = null): VideoParseResult? {
         val link = VideoLinkParser.parse(text) ?: return null
-        return parse(link)
+        return parse(link, qualityQn)
     }
 
-    /** 解析一条已识别的链接；识别到但解析失败一律抛 [VideoParseException] */
-    suspend fun parse(link: DetectedVideoLink): VideoParseResult {
+    /**
+     * 解析一条已识别的链接；识别到但解析失败一律抛 [VideoParseException]。
+     *
+     * @param qualityQn 目标清晰度编号；null = 跟随平台默认（取最高可用档）。
+     *   只有实现了 [QualitySelectableParser] 的解析器（B站）支持指定，其它平台忽略该参数。
+     */
+    suspend fun parse(link: DetectedVideoLink, qualityQn: Int? = null): VideoParseResult {
         val resolved = if (link.isShortLink) expandShortLink(link) else link
         val parser = VideoParsers.of(resolved.platform)
             ?: throw VideoParseException(
@@ -41,7 +47,12 @@ class VideoParseRepository internal constructor(
             )
         // Cookie 用「当前生效账号」（主账号优先）；未登录为空串，由解析器决定匿名可用还是提示登录
         val cookie = accounts.activeCookie(resolved.platform)
-        return parser.parse(resolved, cookie).withSecureMediaUrls()
+        val result = if (qualityQn != null && parser is QualitySelectableParser) {
+            parser.parseWithQuality(resolved, cookie, qualityQn)
+        } else {
+            parser.parse(resolved, cookie)
+        }
+        return result.withSecureMediaUrls()
     }
 
     /**

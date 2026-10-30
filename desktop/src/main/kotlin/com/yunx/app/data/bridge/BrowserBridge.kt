@@ -58,6 +58,32 @@ object BrowserBridge {
         data object ReturnToBrowser : HookDecision
     }
 
+    /**
+     * 扩展「B 站专属页」提交的一次解析下载请求（不是劫持，是扩展主动交给云析）。
+     *
+     * 与劫持不同：这里**不需要用户确认**（清晰度与下载方式已在插件页选好），
+     * 云析收到后静默解析 BVID 并按 [mode] 直接入队。
+     */
+    data class BiliRequest(
+        /** 视频 BVID（如 `BV1xx411c7mD`） */
+        val bvid: String,
+        /** 发起页面地址（日志用） */
+        val pageUrl: String,
+        /** 目标清晰度编号（B 站 qn）；0 = 不指定，用平台默认 */
+        val qn: Int,
+        /** 下载方式：`merge` 合轨 / `video` 仅视频 / `audio` 仅音频 / `separate` 两轨分别保存 */
+        val mode: String,
+        /** 视频标题（日志用） */
+        val title: String
+    )
+
+    /** B 站请求的消费者（由 UI 层注册）；返回是否已受理 */
+    @Volatile
+    var onBiliRequest: ((BiliRequest) -> Boolean)? = null
+
+    /** 交给 UI 层处理一条 B 站请求；未注册消费者时按未受理返回 */
+    fun dispatchBili(req: BiliRequest): Boolean = onBiliRequest?.invoke(req) ?: false
+
     private val seq = AtomicLong(0)
 
     private val _pending = MutableStateFlow<List<HookRequest>>(emptyList())

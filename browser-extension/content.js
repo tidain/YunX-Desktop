@@ -15,6 +15,7 @@
     '\\.(mp4|m4v|mkv|webm|flv|f4v|mov|avi|ts|m3u8|mpd|mp3|m4a|aac|flac|wav|ogg|opus|' +
     'zip|rar|7z|tar|gz|bz2|xz|iso|exe|msi|apk|ipa|dmg|pkg|deb|rpm|' +
     'pdf|epub|mobi|azw3|doc|docx|xls|xlsx|ppt|pptx|torrent|img|bin|dat|jar|crx|' +
+    'jpg|jpeg|png|gif|webp|bmp|svg|ico|avif|' +
     'ttf|otf|woff|woff2)(\\?|#|$)', 'i');
 
   function abs(u) {
@@ -52,7 +53,8 @@
     });
     document.querySelectorAll('img[src]').forEach((img) => {
       const u = abs(img.currentSrc || img.src);
-      if (u && EXT_RE.test(u)) push(u, 'image/*');
+      // 页面图片不依赖扩展名（CDN 常见无后缀），统一按图片收集，供分类与预览
+      if (u) push(u, 'image/*');
     });
 
     return out.slice(0, 200);

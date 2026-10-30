@@ -32,3 +32,15 @@ interface VideoParser {
     suspend fun validateCookie(cookie: String): String? =
         cookie.trim().takeIf { it.isNotBlank() }?.let { "" }
 }
+
+/**
+ * 支持「按清晰度重解析」的解析器（目前只有哔哩哔哩实现）。
+ *
+ * ★ 为什么是「重解析」而不是「一次拿全部直链」：直链带时效签名且逐档不同，
+ *   一次请求只会下发用户所选那一档的地址；所以用户换档位时重新解析一遍最省内存也最简单。
+ *   [qn] 为 null 表示「不指定，取平台默认（通常是最高的可用档）」。
+ */
+interface QualitySelectableParser {
+
+    suspend fun parseWithQuality(link: DetectedVideoLink, cookie: String, qn: Int?): VideoParseResult
+}

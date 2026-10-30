@@ -50,6 +50,60 @@ const DOWNLOAD_MIME_RE = new RegExp(
 
 const DEFAULT_SETTINGS = { enabled: true, hijack: true, sniff: true };
 
+// ---------------------------------------------------------------- 资源分类
+
+/** 分类显示名（popup 侧同步用） */
+const CATEGORY_LABELS = {
+  image: '图片', video: '视频', audio: '音频', document: '文档',
+  archive: '压缩包', program: '程序', font: '字体', other: '其他',
+};
+
+/** MIME → 分类（优先） */
+const MIME_CATEGORY = [
+  [/^image\//, 'image'],
+  [/^video\//, 'video'],
+  [/^audio\//, 'audio'],
+  [/^font\//, 'font'],
+  [/^application\/(pdf|epub\+zip|rtf|msword|vnd\.openxmlformats-officedocument|vnd\.ms-excel|vnd\.ms-powerpoint|json|xml)|^text\//, 'document'],
+  [/^application\/(zip|x-7z-compressed|x-rar-compressed|x-tar|x-gzip|x-bzip2|x-xz-compressed|x-iso9660-image|x-bittorrent|x-zstd)/, 'archive'],
+  [/^application\/(octet-stream|x-msdownload|x-msdos-program|vnd\.android\.package-archive|vnd\.apple\.installer|x-apple-diskimage|x-deb|java-archive|x-chrome-extension)/, 'program'],
+];
+
+/** 扩展名 → 分类（MIME 拿不到时的兜底） */
+const EXT_CATEGORY = {
+  image: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'ico', 'avif', 'tiff', 'heic'],
+  video: ['mp4', 'm4v', 'mkv', 'webm', 'flv', 'f4v', 'mov', 'avi', 'wmv', 'ts', 'm3u8', 'mpd', '3gp', 'mpg', 'mpeg', 'rmvb'],
+  audio: ['mp3', 'm4a', 'aac', 'flac', 'wav', 'ogg', 'opus', 'wma', 'ape', 'amr'],
+  document: ['pdf', 'epub', 'mobi', 'azw3', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'md', 'csv', 'rtf'],
+  archive: ['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz', 'iso', 'torrent', 'zst', 'lz4'],
+  program: ['exe', 'msi', 'apk', 'ipa', 'dmg', 'pkg', 'deb', 'rpm', 'bat', 'sh', 'jar', 'crx', 'appimage'],
+  font: ['ttf', 'otf', 'woff', 'woff2', 'eot'],
+};
+
+/** 从 URL 路径的扩展名推断分类；取不到返回空串 */
+function categoryFromExt(url) {
+  const clean = String(url || '').split('?')[0].split('#')[0];
+  const seg = clean.substring(clean.lastIndexOf('/') + 1);
+  const dot = seg.lastIndexOf('.');
+  if (dot < 0) return '';
+  const ext = seg.substring(dot + 1).toLowerCase();
+  for (const cat in EXT_CATEGORY) {
+    if (EXT_CATEGORY[cat].indexOf(ext) >= 0) return cat;
+  }
+  return '';
+}
+
+/** 资源分类：MIME 优先，扩展名兜底，都拿不到归 other */
+function categorize(mime, url) {
+  const m = String(mime || '').split(';')[0].trim().toLowerCase();
+  if (m) {
+    for (const pair of MIME_CATEGORY) {
+      if (pair[0].test(m)) return pair[1];
+    }
+  }
+  return categoryFromExt(url) || 'other';
+}
+
 // ---------------------------------------------------------------- 状态
 
 /** { port, token } | null */
@@ -262,6 +316,33 @@ async function postHook(payload) {
   }
 }
 
+/**
+ * POST /bili：把 B 站视频（BVID + 清晰度 + 下载方式）交给云析静默加入下载队列。
+ * fire-and-forget：云析收到即返回，解析与入队都在云析后台完成，不弹窗、不打断。
+ * @returns {Promise<{ok:boolean, error?:string}>}
+ */
+async function postBili(payload) {
+  const b = await ensureBridge(false);
+  if (!b) return { ok: false, error: '未检测到云析，请先启动云析' };
+  try {
+    const r = await fetch('http://127.0.0.1:' + b.port + '/bili', {
+      method: 'POST',
+      cache: 'no-store',
+      headers: { 'Content-Type': 'application/json', 'X-YunX-Token': b.token },
+      body: JSON.stringify(payload),
+    });
+    if (r.status === 401) { invalidateBridge(); return { ok: false, error: '云析连接已失效，请重试' }; }
+    if (!r.ok) return { ok: false, error: '云析拒绝请求（' + r.status + '）' };
+    const d = await r.json().catch(() => null);
+    if (d && d.ok) return { ok: true };
+    return { ok: false, error: (d && d.error) || '云析处理失败' };
+  } catch (e) {
+    log('bili 提交失败：', e && e.message);
+    invalidateBridge();
+    return { ok: false, error: '提交失败：请确认云析正在运行' };
+  }
+}
+
 /** 归还浏览器下载：重新发起下载（带 Referer，失败则退回不带请求头） */
 async function redownload(payload) {
   const base = { url: payload.url, conflictAction: 'uniquify' };
@@ -326,6 +407,7 @@ chrome.webRequest.onHeadersReceived.addListener(
       fileName: fileNameFromDisposition(disp) || fileNameFromUrl(url),
       mime: mime,
       size: size,
+      category: categorize(mime, url),
       source: 'net',
       time: Date.now(),
     };
@@ -453,6 +535,10 @@ async function collectResources(tabId) {
     seen.add(e.url);
     // DOM 缺大小 → 用网络嗅探补齐
     if ((e.size == null || e.size <= 0) && sniffByUrl.has(e.url)) e.size = sniffByUrl.get(e.url).size;
+    // DOM 缺 MIME → 用网络嗅探补齐
+    if (!e.mime && sniffByUrl.has(e.url)) e.mime = sniffByUrl.get(e.url).mime || '';
+    // 两端都统一按 MIME 优先重算分类，保证一致
+    e.category = categorize(e.mime, e.url);
     out.push(e);
   }
   return out;
@@ -498,6 +584,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         mime: msg.mime || '',
       });
       sendResponse({ ok: true, action: d.action });
+    })();
+    return true;
+  }
+
+  if (msg.type === 'yunx-bili-download') {
+    (async () => {
+      const st = await getSettings();
+      if (!st.enabled) { sendResponse({ ok: false, error: '插件未启用' }); return; }
+      const resp = await postBili({
+        bvid: msg.bvid || '',
+        pageUrl: msg.pageUrl || '',
+        qn: typeof msg.qn === 'number' ? msg.qn : 0,
+        mode: msg.mode || 'merge',
+        title: msg.title || '',
+      });
+      sendResponse(resp);
     })();
     return true;
   }

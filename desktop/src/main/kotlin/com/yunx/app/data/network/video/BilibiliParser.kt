@@ -1,6 +1,7 @@
 package com.yunx.app.data.network.video
 
 import com.yunx.app.data.download.DownloadPathPolicy
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -19,7 +20,7 @@ import org.json.JSONObject
  * - 番剧/课程（`bangumi/play`、`cheese/play`）不在识别范围内，需要完全不同的接口与登录态；
  * - 若 B 站把 `playurl` 也改成必须 WBI 签名，此接口需要换成带签名版本（见 Agent.md 的 TODO）。
  */
-object BilibiliParser : VideoParser {
+object BilibiliParser : VideoParser, QualitySelectableParser {
 
     override val platform: VideoPlatform = VideoPlatform.BILIBILI
 
@@ -65,7 +66,19 @@ object BilibiliParser : VideoParser {
         return data.optString("uname")
     }
 
-    override suspend fun parse(link: DetectedVideoLink, cookie: String): VideoParseResult {
+    override suspend fun parse(link: DetectedVideoLink, cookie: String): VideoParseResult =
+        parseWithQuality(link, cookie, null)
+
+    /**
+     * 解析并指定清晰度。
+     *
+     * @param qn 目标清晰度编号；null = 交给 B 站决定（默认最高可用档，等价于原来的 `qn=120`）
+     */
+    override suspend fun parseWithQuality(
+        link: DetectedVideoLink,
+        cookie: String,
+        qn: Int?
+    ): VideoParseResult {
         val viewUrl = if (link.id.startsWith("BV", ignoreCase = true)) {
             "$VIEW_URL?bvid=${link.id}"
         } else {
@@ -93,7 +106,7 @@ object BilibiliParser : VideoParser {
         // ① 已登录才试 DASH 高清：音视频分离的两路流，下载时由 DashMuxer 合轨。
         //    ★ 未登录不试：匿名拿到的 DASH 往往也是最低清，不值得为它引入更长、更易失败的合轨链路。
         if (cookie.isNotBlank()) {
-            dashQuality(bvid, cid, cookie)?.let { dash ->
+            dashQuality(bvid, cid, cookie, qn)?.let { dash ->
                 return buildResult(
                     data = data,
                     bvid = bvid,
@@ -108,14 +121,16 @@ object BilibiliParser : VideoParser {
                         audioHeaders = mediaHeaders(cookie),
                         // 分轨流不能直接预览（.m4s + 两路），另取一份单文件直链给预览用
                         previewUrl = mergedPreviewUrl(bvid, cid, cookie)
-                    )
+                    ),
+                    qualities = dash.qualities,
+                    selectedQn = dash.quality
                 )
             }
         }
 
         // ② 退回单文件 durl（未登录 / DASH 不可用）：能直接下载播放，代价是清晰度偏低
         val play = VideoHttp.getJson(
-            "$PLAY_URL?bvid=$bvid&cid=$cid&qn=80&fnval=1&fnver=0&fourk=1&platform=html5&high_quality=1",
+            "$PLAY_URL?bvid=$bvid&cid=$cid&qn=${qn ?: 80}&fnval=1&fnver=0&fourk=1&platform=html5&high_quality=1",
             apiHeaders(cookie),
             "B站取直链"
         )
@@ -145,12 +160,20 @@ object BilibiliParser : VideoParser {
                 size = first.optLong("size", -1L),
                 headers = mediaHeaders(cookie),
                 quality = qualityLabel(playData.optInt("quality"))
-            )
+            ),
+            qualities = qualityOptions(playData),
+            selectedQn = playData.optInt("quality")
         )
     }
 
     /** 组装解析结果（DASH 与单文件两条路径共用，避免字段各写一遍） */
-    private fun buildResult(data: JSONObject, bvid: String, media: VideoMedia): VideoParseResult =
+    private fun buildResult(
+        data: JSONObject,
+        bvid: String,
+        media: VideoMedia,
+        qualities: List<VideoQuality> = emptyList(),
+        selectedQn: Int = 0
+    ): VideoParseResult =
         VideoParseResult(
             platform = platform,
             title = data.optString("title"),
@@ -160,40 +183,40 @@ object BilibiliParser : VideoParser {
             text = data.optString("desc"),
             timestampSeconds = data.optLong("pubdate"),
             url = "https://www.bilibili.com/video/$bvid",
-            medias = listOf(media)
+            medias = listOf(media),
+            qualities = qualities,
+            selectedQn = selectedQn
         )
 
-    /** DASH 分轨直链（视频轨 + 音轨 + 清晰度编号） */
-    private data class DashStream(val videoUrl: String, val audioUrl: String, val quality: Int)
+    /** DASH 分轨直链（视频轨 + 音轨 + 清晰度编号 + 可选档位） */
+    private data class DashStream(
+        val videoUrl: String,
+        val audioUrl: String,
+        val quality: Int,
+        val qualities: List<VideoQuality>
+    )
 
     /**
-     * 取 DASH 分轨直链：视频轨取清晰度最高的一路、音轨取码率最高的一路。
+     * 取 DASH 分轨直链：视频轨取目标清晰度（[qn] 为空则取最高）、音轨取码率最高的一路。
      *
-     * ★ `fnval=4048` 是「DASH + HDR + 4K + 杜比」的组合位；`qn=120` 表示「能给多高给多高」，
+     * ★ `fnval=4048` 是「DASH + HDR + 4K + 杜比」的组合位；`qn` 不指定时用 120（「能给多高给多高」），
      *   实际返回哪几档由账号权限与版权决定。任何一步不对（没有 dash 字段、两轨缺一）
      *   都返回 null，由调用方退回单文件路径 —— 宁可低清可用，也不要在这里抛错。
      */
-    private suspend fun dashQuality(bvid: String, cid: Long, cookie: String): DashStream? {
+    private suspend fun dashQuality(bvid: String, cid: Long, cookie: String, qn: Int?): DashStream? {
         val json = runCatching {
             VideoHttp.getJson(
-                "$PLAY_URL?bvid=$bvid&cid=$cid&qn=120&fnval=4048&fnver=0&fourk=1",
+                "$PLAY_URL?bvid=$bvid&cid=$cid&qn=${qn ?: 120}&fnval=4048&fnver=0&fourk=1",
                 apiHeaders(cookie),
                 "B站取 DASH 直链"
             )
         }.getOrNull() ?: return null
-        val dash = json.optJSONObject("data")?.optJSONObject("dash") ?: return null
+        val data = json.optJSONObject("data") ?: return null
+        val dash = data.optJSONObject("dash") ?: return null
         val videos = dash.optJSONArray("video") ?: return null
         val audios = dash.optJSONArray("audio") ?: return null
 
-        // 数组通常已按清晰度降序，但显式比较更稳（不同端返回顺序不一致过）。
-        // ★ 优先 AVC（codecid=7）：同样的清晰度下 H.264 兼容性最好，合轨后的 mp4 在系统播放器/
-        //   JavaFX 里都能直接播；HEVC（12）/AV1（13）只作为兜底。
-        val avcOnly = (0 until videos.length())
-            .mapNotNull { videos.optJSONObject(it) }
-            .filter { it.optInt("codecid") == CODEC_AVC }
-        val bestVideo = (avcOnly.ifEmpty {
-            (0 until videos.length()).mapNotNull { videos.optJSONObject(it) }
-        }).maxByOrNull { it.optInt("id") } ?: return null
+        val bestVideo = pickVideoTrack(videos, qn) ?: return null
         val bestAudio = (0 until audios.length())
             .mapNotNull { audios.optJSONObject(it) }
             .maxByOrNull { it.optInt("id") } ?: return null
@@ -201,7 +224,66 @@ object BilibiliParser : VideoParser {
         // 直链字段名有两种（baseUrl / base_url），且可能被下发成 JSON null（optString 会得到 "null"）
         val videoUrl = bestVideo.dashPreferredUrl() ?: return null
         val audioUrl = bestAudio.dashPreferredUrl() ?: return null
-        return DashStream(videoUrl = videoUrl, audioUrl = audioUrl, quality = bestVideo.optInt("id"))
+        return DashStream(
+            videoUrl = videoUrl,
+            audioUrl = audioUrl,
+            quality = bestVideo.optInt("id"),
+            qualities = qualityOptions(data)
+        )
+    }
+
+    /**
+     * 从 `dash.video` 里挑一路视频轨。
+     *
+     * ★ 优先 AVC（codecid=7）：同样的清晰度下 H.264 兼容性最好，合轨后的 mp4 在系统播放器/
+     *   JavaFX 里都能直接播；HEVC（12）/AV1（13）只作为兜底。
+     * 指定 [qn] 时优先取该档；该档缺失则取不高于它的最高档；全都高于 [qn] 时退回最高档。
+     */
+    private fun pickVideoTrack(videos: JSONArray, qn: Int?): JSONObject? {
+        val all = (0 until videos.length()).mapNotNull { videos.optJSONObject(it) }
+        if (all.isEmpty()) return null
+        val pool = all.filter { it.optInt("codecid") == CODEC_AVC }.ifEmpty { all }
+        if (qn != null && qn > 0) {
+            return pool.firstOrNull { it.optInt("id") == qn }
+                ?: pool.filter { it.optInt("id") <= qn }.maxByOrNull { it.optInt("id") }
+                ?: pool.maxByOrNull { it.optInt("id") }
+        }
+        return pool.maxByOrNull { it.optInt("id") }
+    }
+
+    /**
+     * 解析可选清晰度档位（`playurl` 的 `data`）。
+     *
+     * 优先用 `support_formats[]`（每项自带 `quality` 与 `new_description`，文案最准）；
+     * 老接口只给 `accept_quality[]` 与平行的 `accept_description[]` 两个数组，作为兜底。
+     * 结果按 qn 从高到低排序，界面从上到下即「从清晰到模糊」。
+     */
+    private fun qualityOptions(data: JSONObject): List<VideoQuality> {
+        val out = LinkedHashMap<Int, String>()
+        data.optJSONArray("support_formats")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val q = o.optInt("quality", -1)
+                if (q <= 0) continue
+                val label = o.optString("new_description")
+                    .ifBlank { o.optString("display_desc") }
+                    .ifBlank { qualityLabel(q) }
+                out.putIfAbsent(q, label)
+            }
+        }
+        if (out.isEmpty()) {
+            val qs = data.optJSONArray("accept_quality")
+            val ds = data.optJSONArray("accept_description")
+            if (qs != null) {
+                for (i in 0 until qs.length()) {
+                    val q = qs.optInt(i, -1)
+                    if (q <= 0) continue
+                    val label = ds?.optString(i).orEmpty().ifBlank { qualityLabel(q) }
+                    out.putIfAbsent(q, label)
+                }
+            }
+        }
+        return out.entries.sortedByDescending { it.key }.map { VideoQuality(it.key, it.value) }
     }
 
     private fun JSONObject.dashUrl(): String? =

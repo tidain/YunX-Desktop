@@ -3,6 +3,8 @@ package com.yunx.app.ui.screens
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,6 +33,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -54,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import com.yunx.app.data.network.video.VideoMedia
 import com.yunx.app.data.network.video.VideoMediaKind
 import com.yunx.app.data.network.video.VideoParseResult
+import com.yunx.app.data.network.video.VideoQuality
 import com.yunx.app.ui.components.RemoteImage
 import com.yunx.app.ui.items.logoAsset
 import com.yunx.app.ui.resolve.formatSize
@@ -88,6 +92,8 @@ internal fun VideoResultSection(
     onPreviewImage: (String, Map<String, String>) -> Unit,
     /** 点击「预览」：把视频媒体交给宿主打开播放器 */
     onPreviewVideo: (VideoMedia) -> Unit,
+    /** 切换清晰度（只在平台返回了可选档位时才有意义，如 B 站） */
+    onSelectQuality: (Int) -> Unit = {},
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -121,6 +127,14 @@ internal fun VideoResultSection(
 
             if (result.notice.isNotBlank()) {
                 NoticeBar(notice = result.notice)
+            }
+
+            if (result.qualities.isNotEmpty()) {
+                QualityBar(
+                    qualities = result.qualities,
+                    selectedQn = result.selectedQn,
+                    onSelect = onSelectQuality
+                )
             }
 
             if (isImageNote) {
@@ -288,6 +302,39 @@ private fun NoticeBar(notice: String) {
                 text = notice,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onTertiaryContainer
+            )
+        }
+    }
+}
+
+/**
+ * 清晰度选择条：横向滚动的胶囊 chips，标出当前档位（[selectedQn]）。
+ * 只在平台返回了可选档位时显示（目前 B 站会填）。切换档位会触发一次重新解析。
+ */
+@Composable
+private fun QualityBar(
+    qualities: List<VideoQuality>,
+    selectedQn: Int,
+    onSelect: (Int) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            text = "清晰度",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        qualities.forEach { quality ->
+            FilterChip(
+                selected = quality.qn == selectedQn,
+                onClick = { onSelect(quality.qn) },
+                label = { Text(quality.label) }
             )
         }
     }

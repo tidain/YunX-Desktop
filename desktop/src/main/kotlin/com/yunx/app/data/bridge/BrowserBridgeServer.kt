@@ -94,6 +94,7 @@ object BrowserBridgeServer {
     private fun createContexts(server: HttpServer) {
         server.createContext("/ping", ::handlePing)
         server.createContext("/hook", ::handleHook)
+        server.createContext("/bili", ::handleBili)
     }
 
     // ---------------- 请求处理 ----------------
@@ -165,6 +166,59 @@ object BrowserBridgeServer {
             respond(ex, 200, decisionJson(decision))
         } catch (e: Exception) {
             Log.w(TAG, "hook 处理异常: ${e.javaClass.simpleName}: ${e.message}")
+            runCatching { respond(ex, 500, """{"error":"internal"}""") }
+        } finally {
+            ex.close()
+        }
+    }
+
+    /**
+     * 扩展「B 站专属页」提交解析下载：`{bvid, pageUrl, qn, mode, title}`。
+     *
+     * 与 `/hook` 不同，这里**不挂起等用户决定**：清晰度与下载方式都已在插件页选好，
+     * 直接把请求转交 UI 层（[BrowserBridge.dispatchBili]）静默入队，立即返回 `{"ok":true}`。
+     */
+    private fun handleBili(ex: HttpExchange) {
+        try {
+            if (!applyCors(ex, json = true)) {
+                respond(ex, 403, """{"error":"forbidden origin"}""")
+                return
+            }
+            if (ex.requestMethod.equals("OPTIONS", ignoreCase = true)) {
+                respond(ex, 204, "")
+                return
+            }
+            if (!ex.requestMethod.equals("POST", ignoreCase = true)) {
+                respond(ex, 405, """{"error":"method not allowed"}""")
+                return
+            }
+            if (!tokenMatches(ex)) {
+                respond(ex, 401, """{"error":"bad token"}""")
+                return
+            }
+            val body = ex.requestBody.readBytes().toString(StandardCharsets.UTF_8)
+            val json = runCatching { JSONObject(body) }.getOrNull()
+            if (json == null) {
+                respond(ex, 400, """{"error":"bad json"}""")
+                return
+            }
+            val bvid = json.optString("bvid").trim()
+            if (bvid.isEmpty()) {
+                respond(ex, 400, """{"error":"missing bvid"}""")
+                return
+            }
+            val req = BrowserBridge.BiliRequest(
+                bvid = bvid,
+                pageUrl = json.optString("pageUrl"),
+                qn = json.optInt("qn", 0),
+                mode = json.optString("mode", "merge"),
+                title = json.optString("title")
+            )
+            Log.i(TAG, "收到 B 站下载请求: $bvid qn=${req.qn} mode=${req.mode}")
+            val accepted = BrowserBridge.dispatchBili(req)
+            respond(ex, 200, JSONObject().put("ok", accepted).toString())
+        } catch (e: Exception) {
+            Log.w(TAG, "bili 处理异常: ${e.javaClass.simpleName}: ${e.message}")
             runCatching { respond(ex, 500, """{"error":"internal"}""") }
         } finally {
             ex.close()

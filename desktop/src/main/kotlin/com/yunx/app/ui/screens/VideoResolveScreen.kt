@@ -138,6 +138,7 @@ fun VideoResolveScreen(
                 onDownloadMedia = { media -> startDownload(listOf(media)) },
                 onPreviewImage = { url, headers -> preview = url to headers },
                 onPreviewVideo = { media -> videoPreview = media },
+                onSelectQuality = viewModel::selectQuality,
                 onBack = onBack
             )
         }

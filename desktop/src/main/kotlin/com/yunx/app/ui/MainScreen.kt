@@ -66,6 +66,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.yunx.app.AppContext
 import com.yunx.app.data.announcement.AnnouncementReadStore
 import com.yunx.app.data.backup.AuthBackupManager
+import com.yunx.app.data.bridge.BrowserBridge
 import com.yunx.app.data.db.AppDatabase
 import com.yunx.app.data.download.ChunkDownloader
 import com.yunx.app.data.download.DownloadManager
@@ -86,6 +87,8 @@ import com.yunx.app.data.network.QuarkApi
 import com.yunx.app.data.network.TokenCheck
 import com.yunx.app.data.network.UCApi
 import com.yunx.app.data.network.XunleiApi
+import com.yunx.app.data.network.video.VideoMedia
+import com.yunx.app.data.network.video.VideoParseResult
 import com.yunx.app.data.network.video.VideoPlatform
 import com.yunx.app.data.download.VideoDownloads
 import com.yunx.app.data.update.UpdateChecker
@@ -797,78 +800,7 @@ fun MainScreen(
                     val result = (videoResolveViewModel.uiState as? VideoResolveUiState.Success)?.result
                     if (result != null && medias.isNotEmpty()) {
                         scope.launch {
-                            val platform = DownloadPlatform.forVideoPlatform(result.platform)
-                            var queued = 0
-                            suspend fun enqueueOne(
-                                url: String,
-                                fileName: String,
-                                headers: Map<String, String>,
-                                size: Long,
-                                mergeAudioUrl: String = "",
-                                mergeAudioHeaders: Map<String, String> = emptyMap(),
-                                motionUrl: String = ""
-                            ) {
-                                if (url.isBlank()) return
-                                downloadManager.enqueue(
-                                    url = url,
-                                    fileName = fileName,
-                                    headers = headers,
-                                    size = size,
-                                    platform = platform,
-                                    // DASH 音轨 / 动图资源随任务落库，由 DownloadManager 决定是否合轨或合成
-                                    mergeAudioUrl = mergeAudioUrl,
-                                    mergeAudioHeaders = mergeAudioHeaders,
-                                    motionUrl = motionUrl
-                                )
-                                queued++
-                            }
-                            medias.forEachIndexed { index, media ->
-                                val baseName = VideoDownloads.fileNameFor(result, media, index, medias.size)
-                                val stem = baseName.substringBeforeLast('.', baseName)
-                                val ext = baseName.substringAfterLast('.', "mp4").ifBlank { "mp4" }
-                                val dash = media.audioUrl.isNotBlank()
-                                when {
-                                    // 非分轨媒体（或用户选「合并」）：保持原有行为
-                                    !dash || streamMode == VideoStreamMode.MERGE -> enqueueOne(
-                                        url = media.url,
-                                        fileName = baseName,
-                                        headers = media.headers,
-                                        size = media.size,
-                                        mergeAudioUrl = media.audioUrl,
-                                        mergeAudioHeaders = media.audioHeaders,
-                                        motionUrl = media.motionUrl
-                                    )
-                                    // 仅音频：只下音轨，存 .m4a
-                                    streamMode == VideoStreamMode.AUDIO -> enqueueOne(
-                                        url = media.audioUrl,
-                                        fileName = "$stem-audio.m4a",
-                                        headers = media.audioHeaders,
-                                        size = -1L
-                                    )
-                                    // 仅视频：只下视频轨（无声）
-                                    streamMode == VideoStreamMode.VIDEO -> enqueueOne(
-                                        url = media.url,
-                                        fileName = "$stem-video.$ext",
-                                        headers = media.headers,
-                                        size = media.size
-                                    )
-                                    // 分别保存：两轨各一个任务，不合轨
-                                    else -> {
-                                        enqueueOne(
-                                            url = media.url,
-                                            fileName = "$stem-video.$ext",
-                                            headers = media.headers,
-                                            size = media.size
-                                        )
-                                        enqueueOne(
-                                            url = media.audioUrl,
-                                            fileName = "$stem-audio.m4a",
-                                            headers = media.audioHeaders,
-                                            size = -1L
-                                        )
-                                    }
-                                }
-                            }
+                            val queued = enqueueVideoMedias(downloadManager, result, medias, streamMode)
                             SnackbarController.show("已加入下载队列（$queued 项）")
                             currentTab = MainTab.Download
                             videoResolveViewModel.reset()
@@ -1421,6 +1353,34 @@ fun MainScreen(
             onDispose { BrowserHookController.onAccept = null }
         }
 
+        // 浏览器插件「B 站专属页」提交的解析下载：插件页已选好清晰度与下载方式，
+        // 这里静默解析后直接入队（不弹窗、不切到解析页），只切下载 Tab 并轻提示结果。
+        DisposableEffect(Unit) {
+            BrowserBridge.onBiliRequest = { req ->
+                scope.launch {
+                    try {
+                        val result = videoResolveViewModel.parseForPlugin(
+                            req.bvid,
+                            req.qn.takeIf { it > 0 }
+                        )
+                        val queued = enqueueVideoMedias(
+                            downloadManager, result, result.medias, biliStreamMode(req.mode)
+                        )
+                        if (queued > 0) {
+                            SnackbarController.show("已加入下载队列（$queued 项）")
+                            currentTab = MainTab.Download
+                        } else {
+                            SnackbarController.show("B 站未解析到可下载的资源")
+                        }
+                    } catch (e: Exception) {
+                        SnackbarController.show("B 站解析失败：${e.message ?: "未知错误"}")
+                    }
+                }
+                true
+            }
+            onDispose { BrowserBridge.onBiliRequest = null }
+        }
+
         // 关闭确认弹窗（退出 / 最小化到托盘 / 取消）
         CloseConfirmDialog(
             visible = showCloseDialog,
@@ -1644,6 +1604,105 @@ fun MainScreen(
         }
         }
     }
+}
+
+/**
+ * 把一批视频媒体按分轨方式加入下载队列，返回实际入队条数。
+ *
+ * - 非分轨媒体（[VideoMedia.audioUrl] 为空）或 [VideoStreamMode.MERGE]：一条任务，音轨随任务落库由
+ *   `DownloadManager` 负责合轨；
+ * - [VideoStreamMode.AUDIO]：只下音轨（`.m4a`）；[VideoStreamMode.VIDEO]：只下视频轨（无声）；
+ * - [VideoStreamMode.SEPARATE]：两轨各一条任务，不合轨。
+ *
+ * 解析页的「下载所选」与浏览器插件「B 站专属页」都走这里，保证两条入口行为一致。
+ */
+private suspend fun enqueueVideoMedias(
+    downloadManager: DownloadManager,
+    result: VideoParseResult,
+    medias: List<VideoMedia>,
+    streamMode: VideoStreamMode
+): Int {
+    val platform = DownloadPlatform.forVideoPlatform(result.platform)
+    var queued = 0
+    suspend fun enqueueOne(
+        url: String,
+        fileName: String,
+        headers: Map<String, String>,
+        size: Long,
+        mergeAudioUrl: String = "",
+        mergeAudioHeaders: Map<String, String> = emptyMap(),
+        motionUrl: String = ""
+    ) {
+        if (url.isBlank()) return
+        downloadManager.enqueue(
+            url = url,
+            fileName = fileName,
+            headers = headers,
+            size = size,
+            platform = platform,
+            // DASH 音轨 / 动图资源随任务落库，由 DownloadManager 决定是否合轨或合成
+            mergeAudioUrl = mergeAudioUrl,
+            mergeAudioHeaders = mergeAudioHeaders,
+            motionUrl = motionUrl
+        )
+        queued++
+    }
+    medias.forEachIndexed { index, media ->
+        val baseName = VideoDownloads.fileNameFor(result, media, index, medias.size)
+        val stem = baseName.substringBeforeLast('.', baseName)
+        val ext = baseName.substringAfterLast('.', "mp4").ifBlank { "mp4" }
+        val dash = media.audioUrl.isNotBlank()
+        when {
+            // 非分轨媒体（或用户选「合并」）：保持原有行为
+            !dash || streamMode == VideoStreamMode.MERGE -> enqueueOne(
+                url = media.url,
+                fileName = baseName,
+                headers = media.headers,
+                size = media.size,
+                mergeAudioUrl = media.audioUrl,
+                mergeAudioHeaders = media.audioHeaders,
+                motionUrl = media.motionUrl
+            )
+            // 仅音频：只下音轨，存 .m4a
+            streamMode == VideoStreamMode.AUDIO -> enqueueOne(
+                url = media.audioUrl,
+                fileName = "$stem-audio.m4a",
+                headers = media.audioHeaders,
+                size = -1L
+            )
+            // 仅视频：只下视频轨（无声）
+            streamMode == VideoStreamMode.VIDEO -> enqueueOne(
+                url = media.url,
+                fileName = "$stem-video.$ext",
+                headers = media.headers,
+                size = media.size
+            )
+            // 分别保存：两轨各一个任务，不合轨
+            else -> {
+                enqueueOne(
+                    url = media.url,
+                    fileName = "$stem-video.$ext",
+                    headers = media.headers,
+                    size = media.size
+                )
+                enqueueOne(
+                    url = media.audioUrl,
+                    fileName = "$stem-audio.m4a",
+                    headers = media.audioHeaders,
+                    size = -1L
+                )
+            }
+        }
+    }
+    return queued
+}
+
+/** 插件页传来的下载方式字符串 → 分轨下载方式（未知值按「合并」处理） */
+private fun biliStreamMode(mode: String): VideoStreamMode = when (mode.lowercase()) {
+    "video" -> VideoStreamMode.VIDEO
+    "audio" -> VideoStreamMode.AUDIO
+    "separate" -> VideoStreamMode.SEPARATE
+    else -> VideoStreamMode.MERGE
 }
 
 /**

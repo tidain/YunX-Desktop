@@ -58,6 +58,10 @@
 
 * { box-sizing: border-box; }
 
+/* hidden 属性必须能压过下面用 display:flex 定义的布局（如 .filters / .preview），
+   否则这些元素会一直显示 —— 预览覆盖层会直接铺满整个 popup。 */
+[hidden] { display: none !important; }
+
 html, body { margin: 0; padding: 0; }
 
 body {

@@ -176,7 +176,15 @@ private fun BrowserHookDialogContent(req: BrowserBridge.HookRequest) {
         // 记住这次选的目录，下次弹窗沿用
         settings.browserHookLastSaveDir = saveDir
         val handler = BrowserHookController.onAccept
-        if (handler != null) handler(req, saveDir, threads) else BrowserBridge.returnToBrowser(req)
+        if (handler != null) {
+            // 先把决定回传给扩展：完成长轮询 + 把自己从 pending 摘掉（弹窗随即消失）。
+            // 这里走 Accept 而不是 ReturnToBrowser —— 扩展不会写根域名冷却，
+            // 之后同一域名的下载照常继续劫持。
+            BrowserBridge.accept(req, saveDir, threads)
+            handler(req, saveDir, threads)
+        } else {
+            BrowserBridge.returnToBrowser(req)
+        }
     }
 
     CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurface) {
@@ -335,7 +343,7 @@ private fun BrowserHookDialogContent(req: BrowserBridge.HookRequest) {
                         Spacer(Modifier.width(8.dp))
                         Button(onClick = {
                             if (threads > THREAD_CONFIRM_THRESHOLD) confirmHigh = true else doAccept()
-                        }) { Text("交给云析下载") }
+                        }) { Text("开始下载") }
                     }
                 }
 

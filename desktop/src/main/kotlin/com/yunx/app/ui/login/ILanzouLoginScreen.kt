@@ -2,7 +2,7 @@ package com.yunx.app.ui.login
 
 import com.yunx.app.ui.BackHandler
 import com.yunx.app.ui.SnackbarController
-import com.yunx.app.ui.rememberGlobalSnackbarHostState
+import com.yunx.app.ui.GlobalSnackbarHost
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -29,7 +29,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -79,10 +78,8 @@ fun ILanzouLoginScreen(
 
     BackHandler { onBack() }
 
-    val snackbarHostState = rememberGlobalSnackbarHostState()
-
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = { GlobalSnackbarHost() },
         topBar = {
             TopAppBar(
                 title = { Text("蓝奏云优享版登录", style = MaterialTheme.typography.titleLarge) },

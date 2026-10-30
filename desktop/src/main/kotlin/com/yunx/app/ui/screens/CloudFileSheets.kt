@@ -39,7 +39,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -63,7 +62,7 @@ import com.yunx.app.data.network.model.ShareExpire
 import com.yunx.app.data.network.model.ShareFile
 import com.yunx.app.ui.SnackbarController
 import com.yunx.app.ui.components.FadeAlertDialog
-import com.yunx.app.ui.rememberGlobalSnackbarHostState
+import com.yunx.app.ui.GlobalSnackbarHost
 import com.yunx.app.util.DesktopActions
 import com.yunx.app.ui.resolve.BackToParentItem
 import com.yunx.app.ui.resolve.CrumbBar
@@ -646,8 +645,6 @@ internal fun ShareResultDialog(
     info: com.yunx.app.data.network.model.ShareInfo,
     onDismiss: () -> Unit
 ) {
-    // Dialog 内提示宿主（AlertDialog 为独立窗口）
-    val snackbarHostState = rememberGlobalSnackbarHostState()
     // 拼接分享文案（按平台区分：139 / 123 / UC / 迅雷 / 百度 / 115 / 光鸭 / 蓝奏系 / 夸克）
     val platformName = when {
         info.shareUrl.contains("139.com") -> "139网盘"
@@ -698,7 +695,7 @@ internal fun ShareResultDialog(
                     )
                 }
                 // Dialog 内提示（AlertDialog 为独立窗口，需自带 Snackbar 宿主）
-                SnackbarHost(hostState = snackbarHostState)
+                GlobalSnackbarHost()
             }
         },
         confirmButton = {

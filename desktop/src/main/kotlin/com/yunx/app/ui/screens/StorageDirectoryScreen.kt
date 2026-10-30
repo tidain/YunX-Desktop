@@ -42,7 +42,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -80,7 +79,7 @@ import com.yunx.app.data.storage.StoragePreset
 import com.yunx.app.ui.BackHandler
 import com.yunx.app.ui.SnackbarController
 import com.yunx.app.ui.components.FadeAlertDialog
-import com.yunx.app.ui.rememberGlobalSnackbarHostState
+import com.yunx.app.ui.GlobalSnackbarHost
 import com.yunx.app.util.DesktopActions
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -113,7 +112,6 @@ fun StorageDirectoryScreen(
     onRestartApp: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val snackbarHostState = rememberGlobalSnackbarHostState()
     // 列表 / 四宫格切换（记住用户的选择）
     var gridMode by rememberSaveable { mutableStateOf(false) }
 
@@ -122,7 +120,7 @@ fun StorageDirectoryScreen(
     Scaffold(
         modifier = modifier.fillMaxSize(),
         containerColor = MaterialTheme.colorScheme.surface,
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = { GlobalSnackbarHost() },
         topBar = {
             TopAppBar(
                 title = { Text("储存目录", style = MaterialTheme.typography.titleLarge) },

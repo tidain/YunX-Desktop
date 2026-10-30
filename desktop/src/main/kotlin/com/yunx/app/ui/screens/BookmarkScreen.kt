@@ -47,7 +47,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -69,7 +68,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.yunx.app.data.db.BookmarkEntity
 import com.yunx.app.data.network.ShareLinkParser
-import com.yunx.app.ui.rememberGlobalSnackbarHostState
+import com.yunx.app.ui.GlobalSnackbarHost
 import com.yunx.app.ui.viewmodel.BookmarkViewModel
 import com.yunx.app.util.DesktopActions
 
@@ -91,9 +90,6 @@ fun BookmarkScreen(
     val bookmarks by viewModel.bookmarks.collectAsState()
     val categories by viewModel.categories.collectAsState()
 
-    // 独立全屏覆盖页：自带 Snackbar 宿主（覆盖层会遮挡主页 Scaffold 的 SnackbarHost）
-    val snackbarHostState = rememberGlobalSnackbarHostState()
-
     // null 表示「全部」
     var selectedCategory by rememberSaveable { mutableStateOf<String?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
@@ -109,7 +105,7 @@ fun BookmarkScreen(
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = { GlobalSnackbarHost() },
         topBar = {
             TopAppBar(
                 title = { Text("收藏网盘链接", style = MaterialTheme.typography.titleLarge) },

@@ -43,7 +43,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -71,7 +70,7 @@ import com.yunx.app.data.preview.FfplayManager
 import com.yunx.app.ui.BackHandler
 import com.yunx.app.ui.SnackbarController
 import com.yunx.app.ui.components.FadeAlertDialog
-import com.yunx.app.ui.rememberGlobalSnackbarHostState
+import com.yunx.app.ui.GlobalSnackbarHost
 import com.yunx.app.util.DesktopActions
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -100,7 +99,6 @@ fun DownloadEngineScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val snackbarHostState = rememberGlobalSnackbarHostState()
     val scope = rememberCoroutineScope()
     val settingsRepo = remember { SettingsRepository() }
 
@@ -307,7 +305,7 @@ fun DownloadEngineScreen(
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = { GlobalSnackbarHost() },
         topBar = {
             TopAppBar(
                 title = { Text("引擎管理", style = MaterialTheme.typography.titleLarge) },

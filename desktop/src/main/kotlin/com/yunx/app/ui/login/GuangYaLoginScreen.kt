@@ -29,7 +29,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -51,7 +50,7 @@ import androidx.compose.ui.unit.dp
 import com.yunx.app.ui.BackHandler
 import com.yunx.app.ui.SnackbarController
 import com.yunx.app.ui.components.FadeAlertDialog
-import com.yunx.app.ui.rememberGlobalSnackbarHostState
+import com.yunx.app.ui.GlobalSnackbarHost
 import com.yunx.app.ui.viewmodel.GuangYaAccountViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -102,8 +101,6 @@ fun GuangYaLoginScreen(
         }
     }
 
-    val snackbarHostState = rememberGlobalSnackbarHostState()
-
     BackHandler(enabled = !isSaving && !isSendingSms) { onBack() }
 
     /** 发送验证码：成功后记录 verification_id / is_user 并启动 60s 倒计时 */
@@ -125,7 +122,7 @@ fun GuangYaLoginScreen(
     }
 
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = { GlobalSnackbarHost() },
         topBar = {
             TopAppBar(
                 title = { Text("光鸭云盘登录", style = MaterialTheme.typography.titleLarge) },

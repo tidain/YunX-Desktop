@@ -23,7 +23,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -47,7 +46,7 @@ import androidx.compose.ui.unit.sp
 import com.yunx.app.data.db.BaiduAccountEntity
 import com.yunx.app.data.db.MultiAccountEntity
 import com.yunx.app.ui.SnackbarController
-import com.yunx.app.ui.rememberGlobalSnackbarHostState
+import com.yunx.app.ui.GlobalSnackbarHost
 import com.yunx.app.util.DesktopActions
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -81,8 +80,6 @@ fun BaiduAccountSheet(
     }
 
     // 打开即完全展开，跳过半折叠状态
-    // ModalBottomSheet 为独立窗口，需自带 Snackbar 宿主
-    val snackbarHostState = rememberGlobalSnackbarHostState()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     // 内容滚动到底后继续上滑的滚动量直接消费，避免传给 Sheet 造成上下抽动
@@ -239,7 +236,7 @@ fun BaiduAccountSheet(
             )
 
             // 复制提示（ModalBottomSheet 为独立窗口，需自带 Snackbar 宿主）
-            SnackbarHost(hostState = snackbarHostState)
+            GlobalSnackbarHost()
         }
     }
 }

@@ -40,7 +40,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
@@ -904,8 +903,6 @@ fun MainScreen(
     val topAppBarState = rememberTopAppBarState()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior(topAppBarState)
 
-    // 全局 Snackbar 宿主
-    val snackbarHostState = rememberGlobalSnackbarHostState()
 
     /**
      * 应用内公告：顶栏红点角标 + 启动弹窗。
@@ -1203,10 +1200,7 @@ fun MainScreen(
                 }
             }
             // 全局 Snackbar（悬浮底部居中）
-            SnackbarHost(
-                hostState = snackbarHostState,
-                modifier = Modifier.align(Alignment.BottomCenter)
-            )
+            GlobalSnackbarHost()
         }
 
         // 关于云析：叠加覆盖层（淡入 + 轻微缩放过渡）

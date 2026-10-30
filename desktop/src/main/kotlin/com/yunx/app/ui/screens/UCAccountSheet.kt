@@ -23,7 +23,7 @@ import androidx.compose.ui.unit.sp
 import com.yunx.app.data.db.MultiAccountEntity
 import com.yunx.app.data.db.UCAccountEntity
 import com.yunx.app.ui.SnackbarController
-import com.yunx.app.ui.rememberGlobalSnackbarHostState
+import com.yunx.app.ui.GlobalSnackbarHost
 import com.yunx.app.util.DesktopActions
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -51,8 +51,6 @@ fun UCAccountSheet(
     val loginTime = remember(account.updatedAt) {
         SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(account.updatedAt))
     }
-    // ModalBottomSheet 为独立窗口，需自带 Snackbar 宿主
-    val snackbarHostState = rememberGlobalSnackbarHostState()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scrollState = rememberScrollState()
     val sheetNestedScroll = remember(scrollState) {
@@ -126,7 +124,7 @@ fun UCAccountSheet(
             )
 
             // 复制提示（ModalBottomSheet 为独立窗口，需自带 Snackbar 宿主）
-            SnackbarHost(hostState = snackbarHostState)
+            GlobalSnackbarHost()
         }
     }
 }

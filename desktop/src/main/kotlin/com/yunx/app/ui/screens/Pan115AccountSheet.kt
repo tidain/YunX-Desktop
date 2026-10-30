@@ -23,7 +23,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -47,7 +46,7 @@ import androidx.compose.ui.unit.sp
 import com.yunx.app.data.db.MultiAccountEntity
 import com.yunx.app.data.db.Pan115AccountEntity
 import com.yunx.app.ui.SnackbarController
-import com.yunx.app.ui.rememberGlobalSnackbarHostState
+import com.yunx.app.ui.GlobalSnackbarHost
 import com.yunx.app.util.DesktopActions
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -80,7 +79,6 @@ fun Pan115AccountSheet(
         SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(account.updatedAt))
     }
 
-    val snackbarHostState = rememberGlobalSnackbarHostState()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     val scrollState = rememberScrollState()
@@ -234,7 +232,7 @@ fun Pan115AccountSheet(
             )
 
             // 复制提示（ModalBottomSheet 为独立窗口，需自带 Snackbar 宿主）
-            SnackbarHost(hostState = snackbarHostState)
+            GlobalSnackbarHost()
         }
     }
 }

@@ -2,7 +2,7 @@ package com.yunx.app.ui.login
 
 import com.yunx.app.ui.BackHandler
 import com.yunx.app.ui.SnackbarController
-import com.yunx.app.ui.rememberGlobalSnackbarHostState
+import com.yunx.app.ui.GlobalSnackbarHost
 import com.yunx.app.util.DesktopActions
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -92,11 +92,8 @@ fun XunleiLoginScreen(
 
     BackHandler { onBack() }
 
-    // 全局 Snackbar 宿主
-    val snackbarHostState = rememberGlobalSnackbarHostState()
-
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = { GlobalSnackbarHost() },
         topBar = {
             TopAppBar(
                 title = { Text("迅雷网盘登录", style = MaterialTheme.typography.titleLarge) },

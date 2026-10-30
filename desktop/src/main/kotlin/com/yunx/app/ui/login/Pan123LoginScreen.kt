@@ -2,7 +2,7 @@ package com.yunx.app.ui.login
 
 import com.yunx.app.ui.BackHandler
 import com.yunx.app.ui.SnackbarController
-import com.yunx.app.ui.rememberGlobalSnackbarHostState
+import com.yunx.app.ui.GlobalSnackbarHost
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -54,10 +54,8 @@ fun Pan123LoginScreen(
 
     BackHandler { onBack() }
 
-    val snackbarHostState = rememberGlobalSnackbarHostState()
-
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = { GlobalSnackbarHost() },
         topBar = {
             TopAppBar(
                 title = { Text("123云盘登录", style = MaterialTheme.typography.titleLarge) },

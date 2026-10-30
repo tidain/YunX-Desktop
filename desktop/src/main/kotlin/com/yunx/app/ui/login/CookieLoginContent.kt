@@ -28,7 +28,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -44,7 +43,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.yunx.app.ui.SnackbarController
 import com.yunx.app.ui.jcef.JcefHolder
-import com.yunx.app.ui.rememberGlobalSnackbarHostState
+import com.yunx.app.ui.GlobalSnackbarHost
 import com.yunx.app.util.DesktopActions
 import kotlinx.coroutines.launch
 
@@ -76,7 +75,6 @@ fun CookieLoginContent(
     LaunchedEffect(Unit) { JcefHolder.initInBackground() }
 
     BackHandler(enabled = !isSaving) { onBack() }
-    val snackbarHostState = rememberGlobalSnackbarHostState()
 
     fun doSave() {
         scope.launch {
@@ -93,7 +91,7 @@ fun CookieLoginContent(
     }
 
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = { GlobalSnackbarHost() },
         topBar = {
             TopAppBar(
                 title = { Text(title, style = MaterialTheme.typography.titleLarge) },

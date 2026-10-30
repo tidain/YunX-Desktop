@@ -30,7 +30,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -51,7 +50,7 @@ import com.yunx.app.data.prefs.SettingsRepository
 import com.yunx.app.ui.BackHandler
 import com.yunx.app.ui.SnackbarController
 import com.yunx.app.ui.components.FadeAlertDialog
-import com.yunx.app.ui.rememberGlobalSnackbarHostState
+import com.yunx.app.ui.GlobalSnackbarHost
 
 /**
  * 档位列表一律落在「合理范围」内（不会触发超限确认）；想要更高只能走弹窗里的自定义输入。
@@ -138,7 +137,6 @@ fun ExperimentalFeaturesScreen(
     var minBpsCustomInput by remember { mutableStateOf("") }
     var minAgeCustomInput by remember { mutableStateOf("") }
 
-    val snackbarHostState = rememberGlobalSnackbarHostState()
     // 超出合理范围的自定义取值：非空时弹「超出合理范围」确认，用户确认后才写入
     var riskyChange by remember { mutableStateOf<RiskyChange?>(null) }
 
@@ -175,7 +173,7 @@ fun ExperimentalFeaturesScreen(
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = { GlobalSnackbarHost() },
         topBar = {
             TopAppBar(
                 title = { Text("实验性功能", style = MaterialTheme.typography.titleLarge) },

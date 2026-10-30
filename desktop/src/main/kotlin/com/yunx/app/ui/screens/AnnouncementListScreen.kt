@@ -34,7 +34,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -53,7 +52,7 @@ import androidx.compose.ui.unit.dp
 import com.yunx.app.data.announcement.AnnouncementApi
 import com.yunx.app.data.announcement.relativeTime
 import com.yunx.app.ui.components.RemoteImage
-import com.yunx.app.ui.rememberGlobalSnackbarHostState
+import com.yunx.app.ui.GlobalSnackbarHost
 import com.yunx.app.ui.viewmodel.AnnouncementViewModel
 
 /**
@@ -77,12 +76,10 @@ fun AnnouncementListPage(
     onOpen: (AnnouncementApi.Announcement) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // 独立全屏覆盖页：自带 Snackbar 宿主（覆盖层会遮挡主页 Scaffold 的 SnackbarHost）
-    val snackbarHostState = rememberGlobalSnackbarHostState()
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = { GlobalSnackbarHost() },
         topBar = {
             TopAppBar(
                 title = { Text("公告", style = MaterialTheme.typography.titleLarge) },

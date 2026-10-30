@@ -29,7 +29,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -52,7 +51,7 @@ import com.yunx.app.data.announcement.relativeTime
 import com.yunx.app.ui.components.GitHubMarkdownImageTransformer
 import com.yunx.app.ui.components.ImageViewerOverlay
 import com.yunx.app.ui.components.RemoteImage
-import com.yunx.app.ui.rememberGlobalSnackbarHostState
+import com.yunx.app.ui.GlobalSnackbarHost
 import com.yunx.app.ui.theme.compactMarkdownTypography
 import com.yunx.app.ui.viewmodel.AnnouncementViewModel
 
@@ -76,8 +75,6 @@ fun AnnouncementDetailPage(
     onRefresh: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    // 独立全屏覆盖页：自带 Snackbar 宿主（覆盖层会遮挡主页 Scaffold 的 SnackbarHost）
-    val snackbarHostState = rememberGlobalSnackbarHostState()
     // 单击图片放大查看的当前图片 URL（null = 查看器未打开）
     var viewingImage by remember { mutableStateOf<String?>(null) }
 
@@ -85,7 +82,7 @@ fun AnnouncementDetailPage(
     Box(modifier = modifier.fillMaxSize()) {
         Scaffold(
             modifier = Modifier.fillMaxSize(),
-            snackbarHost = { SnackbarHost(snackbarHostState) },
+            snackbarHost = { GlobalSnackbarHost() },
             topBar = {
                 TopAppBar(
                     title = { Text("公告详情", style = MaterialTheme.typography.titleLarge) },

@@ -227,6 +227,11 @@ fun main(args: Array<String>) {
                 )
             }
         }
+
+        // 浏览器插件劫持下载的询问弹窗：独立无边框置顶窗口。
+        // 与主窗口平级挂载——主窗口被最小化到托盘 / 被浏览器遮住时也能单独弹出，
+        // 不会把整个主界面一起吊起来（区别于窗口内覆盖层的 FadeAlertDialog）。
+        com.yunx.app.ui.components.BrowserHookDialogWindow()
     }
 }
 

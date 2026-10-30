@@ -1,11 +1,15 @@
 /**
  * 云析下载助手 —— popup 脚本
- * 展示云析连接状态、开关设置、当前页面嗅探到的资源，并可一键交给云析下载。
+ * 展示云析连接状态、开关设置、当前页面嗅探到的资源，并可一键交给云析下载；
+ * 同时负责外观（自动 / 亮 / 暗）的读取、应用与持久化。
  */
 
 'use strict';
 
 const $ = (id) => document.getElementById(id);
+
+/** 外观偏好存储键；取值 auto | light | dark */
+const THEME_KEY = 'theme';
 
 function send(msg) {
   return new Promise((resolve) => {
@@ -41,12 +45,45 @@ function escapeHtml(s) {
 }
 
 function setStatus(text, cls) {
-  const el = $('status');
-  el.textContent = text;
-  el.className = 'status' + (cls ? ' ' + cls : '');
+  $('status-text').textContent = text;
+  $('status').className = 'status' + (cls ? ' ' + cls : '');
 }
 
 let currentTab = null;
+
+// ---------------------------------------------------------------- 外观
+
+/**
+ * 应用外观：把 data-theme 写到 <html> 上。
+ * auto 时不写具体配色，交给 CSS 的 prefers-color-scheme 媒体查询跟随浏览器，
+ * 浏览器切换亮/暗时无需 JS 参与即可实时生效。
+ */
+function applyTheme(mode) {
+  const m = (mode === 'light' || mode === 'dark') ? mode : 'auto';
+  document.documentElement.dataset.theme = m;
+  const btns = document.querySelectorAll('#theme-seg .seg-btn');
+  for (const b of btns) b.classList.toggle('active', b.dataset.themeValue === m);
+}
+
+async function loadTheme() {
+  let mode = 'auto';
+  try {
+    const o = await chrome.storage.local.get(THEME_KEY);
+    if (o && typeof o[THEME_KEY] === 'string') mode = o[THEME_KEY];
+  } catch (e) { /* 读取失败则用默认 */ }
+  applyTheme(mode);
+}
+
+function bindTheme() {
+  const btns = document.querySelectorAll('#theme-seg .seg-btn');
+  for (const b of btns) {
+    b.addEventListener('click', () => {
+      const mode = b.dataset.themeValue;
+      applyTheme(mode);
+      try { chrome.storage.local.set({ [THEME_KEY]: mode }); } catch (e) { /* ignore */ }
+    });
+  }
+}
 
 // ---------------------------------------------------------------- 渲染
 
@@ -54,7 +91,11 @@ function renderResources(list) {
   const box = $('list');
   $('count').textContent = String(list.length);
   if (!list.length) {
-    box.innerHTML = '<div class="empty">暂无嗅探到的资源<br />播放或点开页面上的资源后再试</div>';
+    box.innerHTML =
+      '<div class="empty">' +
+      '<div class="empty-title">暂无嗅探到的资源</div>' +
+      '<div class="empty-sub">播放视频或点击页面上的下载按钮后再试</div>' +
+      '</div>';
     return;
   }
 
@@ -78,7 +119,8 @@ function renderResources(list) {
     if (r.size > 0) bits.push(fmtSize(r.size));
     if (r.mime) bits.push(r.mime);
     bits.push(hostOf(r.url));
-    meta.innerHTML = '<span class="tag">' + tag + '</span>' + escapeHtml(bits.join(' · '));
+    meta.innerHTML = '<span class="tag">' + tag + '</span>' +
+      '<span class="text">' + escapeHtml(bits.join(' · ')) + '</span>';
 
     main.appendChild(name);
     main.appendChild(meta);
@@ -173,6 +215,8 @@ $('refresh').addEventListener('click', async () => {
 });
 
 (async function init() {
+  bindTheme();
+  loadTheme();
   bindSwitches();
   await loadSettings();
   await loadStatus();

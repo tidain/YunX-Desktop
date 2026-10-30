@@ -47,6 +47,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -121,7 +122,7 @@ import com.yunx.app.data.repository.XunleiResolveRepository
 import com.yunx.app.ui.clipboard.ClipboardLinkController
 import com.yunx.app.ui.clipboard.ClipboardLinkDetector
 import com.yunx.app.ui.clipboard.ClipboardLinkPopup
-import com.yunx.app.ui.components.BrowserHookDialogHost
+import com.yunx.app.ui.components.BrowserHookController
 import com.yunx.app.ui.components.FadeAlertDialog
 import com.yunx.app.ui.components.OverlayDialogHost
 import com.yunx.app.ui.login.BaiduLoginScreen
@@ -1404,22 +1405,26 @@ fun MainScreen(
         // 合轨在后台线程触发，必须挂在根部常驻组合里才弹得出来。
         EngineInstallPromptHost()
 
-        // 浏览器插件劫持下载询问弹窗（保存目录 + 线程数 + 归还浏览器下载）：
-        // 扩展经本地回环桥在后台线程提交，必须挂在根部常驻组合里才弹得出来。
-        BrowserHookDialogHost { hook, dir, threads ->
-            scope.launch {
-                downloadManager.enqueue(
-                    url = hook.url,
-                    fileName = hook.fileName,
-                    headers = hook.headers,
-                    size = hook.fileSize,
-                    platform = DownloadPlatform.BROWSER,
-                    saveDir = dir,
-                    threads = threads
-                )
-                currentTab = MainTab.Download
-                SnackbarController.show("已交给云析下载：${hook.fileName}（$threads 线程）")
+        // 浏览器插件劫持下载询问弹窗是「独立顶层窗口」（见 BrowserHookDialogWindow，
+        // 挂在 Main.kt 的 application 内），拿不到这里的 DownloadManager / scope，
+        // 所以把「交给云析下载」的处理器注册进去；窗口关闭时注销。
+        DisposableEffect(Unit) {
+            BrowserHookController.onAccept = { hook, dir, threads ->
+                scope.launch {
+                    downloadManager.enqueue(
+                        url = hook.url,
+                        fileName = hook.fileName,
+                        headers = hook.headers,
+                        size = hook.fileSize,
+                        platform = DownloadPlatform.BROWSER,
+                        saveDir = dir,
+                        threads = threads
+                    )
+                    currentTab = MainTab.Download
+                    SnackbarController.show("已交给云析下载：${hook.fileName}（$threads 线程）")
+                }
             }
+            onDispose { BrowserHookController.onAccept = null }
         }
 
         // 关闭确认弹窗（退出 / 最小化到托盘 / 取消）

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="auto">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -9,30 +9,75 @@
 <body>
   <header class="head">
     <img class="logo" src="icons/icon32.png" alt="" />
-    <div class="head-text">
+    <div class="brand">
       <div class="title">云析下载助手</div>
-      <div class="status" id="status">检测中…</div>
+      <div class="status" id="status">
+        <span class="dot"></span><span id="status-text">检测中…</span>
+      </div>
     </div>
-    <button class="icon-btn" id="refresh" title="刷新资源列表">刷新</button>
+    <div class="tools">
+      <div class="seg" id="theme-seg" role="group" aria-label="外观">
+        <button type="button" class="seg-btn" data-theme-value="auto" title="跟随浏览器">自动</button>
+        <button type="button" class="seg-btn" data-theme-value="light" title="始终使用亮色">亮</button>
+        <button type="button" class="seg-btn" data-theme-value="dark" title="始终使用暗色">暗</button>
+      </div>
+      <button type="button" class="icon-btn" id="refresh" title="刷新资源列表" aria-label="刷新">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+          <path d="M21 3v6h-6" />
+        </svg>
+      </button>
+    </div>
   </header>
 
-  <section class="switches">
-    <label class="sw"><input type="checkbox" id="sw-enabled" /><span>启用插件</span></label>
-    <label class="sw"><input type="checkbox" id="sw-hijack" /><span>劫持浏览器下载</span></label>
-    <label class="sw"><input type="checkbox" id="sw-sniff" /><span>嗅探页面资源</span></label>
+  <section class="card">
+    <label class="row">
+      <div class="row-text">
+        <div class="row-title">启用插件</div>
+        <div class="row-sub">关闭后不再嗅探与劫持</div>
+      </div>
+      <span class="switch">
+        <input type="checkbox" id="sw-enabled" />
+        <span class="track"><span class="knob"></span></span>
+      </span>
+    </label>
+    <label class="row">
+      <div class="row-text">
+        <div class="row-title">劫持浏览器下载</div>
+        <div class="row-sub">下载交给云析，由云析询问保存位置与线程数</div>
+      </div>
+      <span class="switch">
+        <input type="checkbox" id="sw-hijack" />
+        <span class="track"><span class="knob"></span></span>
+      </span>
+    </label>
+    <label class="row">
+      <div class="row-text">
+        <div class="row-title">嗅探页面资源</div>
+        <div class="row-sub">在下方列出当前页面可下载的媒体与文件</div>
+      </div>
+      <span class="switch">
+        <input type="checkbox" id="sw-sniff" />
+        <span class="track"><span class="knob"></span></span>
+      </span>
+    </label>
   </section>
 
   <section class="list-head">
-    <span>当前页面资源</span>
+    <span class="list-title">当前页面资源</span>
     <span class="count" id="count">0</span>
   </section>
 
   <div class="list" id="list">
-    <div class="empty">暂无嗅探到的资源</div>
+    <div class="empty">
+      <div class="empty-title">暂无嗅探到的资源</div>
+      <div class="empty-sub">播放视频或点击页面上的下载按钮后再试</div>
+    </div>
   </div>
 
   <footer class="foot">
-    <div id="hint">资源列表仅在本机与云析之间传递，不上传任何数据。</div>
+    <span id="hint">资源列表仅在本机与云析之间传递，不上传任何数据。</span>
   </footer>
 
   <script src="popup.js"></script>

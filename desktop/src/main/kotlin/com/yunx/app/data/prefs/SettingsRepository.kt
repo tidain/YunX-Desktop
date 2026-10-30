@@ -40,6 +40,15 @@ class SettingsRepository {
             if (value.isNullOrBlank()) prefs.remove("download_dir_uri") else prefs.put("download_dir_uri", value)
         }
 
+    /** 浏览器插件劫持弹窗上次选择的保存目录（空串 = 跟随上面的全局保存目录） */
+    var browserHookLastSaveDir: String
+        get() = prefs.get("browser_hook_last_save_dir", "")
+        set(value) {
+            val v = value.trim()
+            if (v.isEmpty()) prefs.remove("browser_hook_last_save_dir")
+            else prefs.put("browser_hook_last_save_dir", v)
+        }
+
     /**
      * 最大同时下载任务数（默认 3，超出的任务排队等待）。
      *

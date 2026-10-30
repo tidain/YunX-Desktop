@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>云析下载助手</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header class="head">
+    <img class="logo" src="icons/icon32.png" alt="" />
+    <div class="head-text">
+      <div class="title">云析下载助手</div>
+      <div class="status" id="status">检测中…</div>
+    </div>
+    <button class="icon-btn" id="refresh" title="刷新资源列表">刷新</button>
+  </header>
+
+  <section class="switches">
+    <label class="sw"><input type="checkbox" id="sw-enabled" /><span>启用插件</span></label>
+    <label class="sw"><input type="checkbox" id="sw-hijack" /><span>劫持浏览器下载</span></label>
+    <label class="sw"><input type="checkbox" id="sw-sniff" /><span>嗅探页面资源</span></label>
+  </section>
+
+  <section class="list-head">
+    <span>当前页面资源</span>
+    <span class="count" id="count">0</span>
+  </section>
+
+  <div class="list" id="list">
+    <div class="empty">暂无嗅探到的资源</div>
+  </div>
+
+  <footer class="foot">
+    <div id="hint">资源列表仅在本机与云析之间传递，不上传任何数据。</div>
+  </footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>

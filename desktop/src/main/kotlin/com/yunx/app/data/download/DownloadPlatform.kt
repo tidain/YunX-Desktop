@@ -26,6 +26,8 @@ object DownloadPlatform {
     const val GITHUB = "github"
     /** 通用/未知来源（手动添加、应用更新下载等） */
     const val GENERIC = "generic"
+    /** 浏览器插件劫持的下载（任务级线程数由用户在弹窗里单独选择） */
+    const val BROWSER = "browser"
     /** 视频平台（抖音/B站等）：任务来源展示与按平台线程数设置 */
     const val VIDEO = "video"
 

@@ -184,6 +184,8 @@ data class DownloadTaskEntity(
     val mergeAudioHeadersJson: String = "",
     /** 动图资源地址（Motion Photo 合成用）；空串 = 普通静图 */
     val motionUrl: String = "",
+    /** 本任务的下载线程数覆盖（浏览器插件按用户弹窗选择传入）；0 = 跟随平台的线程数设置 */
+    val threads: Int = 0,
     val createTime: Long = System.currentTimeMillis()
 ) {
     companion object {

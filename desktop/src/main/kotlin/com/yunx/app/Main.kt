@@ -120,10 +120,16 @@ fun main(args: Array<String>) {
     // 再尽力释放 JCEF
     Runtime.getRuntime().addShutdownHook(
         Thread {
+            com.yunx.app.data.bridge.BrowserBridgeServer.stop()
             com.yunx.app.data.db.AppDatabase.checkpointOnExit()
             JcefHolder.disposeQuietly()
         }
     )
+
+    // 浏览器插件桥（本地回环 HTTP，供 MV3 扩展嗅探/劫持下载后与云析通信）：
+    // 只监听 127.0.0.1，扩展侧按端口区间探测 /ping；端口全被占用时静默跳过（不影响主功能）。
+    runCatching { com.yunx.app.data.bridge.BrowserBridgeServer.start() }
+        .onFailure { com.yunx.app.util.Log.w("YunX-Bridge", "启动浏览器插件桥失败：${it.message}") }
 
     application {
         val scope = rememberCoroutineScope()

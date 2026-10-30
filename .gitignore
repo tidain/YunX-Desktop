@@ -45,6 +45,10 @@ hs_err_pid*
 
 # ---- 本机 IDE / 开发辅助 ----
 .trae/
+# Trae 生成的内联分享包（zip，可由源文件重新生成）
+.trae-html-share-packages/
+# 临时脚本 / 调试日志（验证用，不入库）
+Temp/
 # YunX 参考目录（非本仓库源码，体积大；锚定仓库根目录，避免误伤 com/yunx 源码包）
 /YunX/
 # 运行日志文本（yunx_log_*.txt）

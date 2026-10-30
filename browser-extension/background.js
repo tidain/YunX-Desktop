@@ -1,0 +1,504 @@
+/**
+ * 云析下载助手 —— 后台服务（MV3 Service Worker）
+ *
+ * 职责：
+ *  1. 嗅探：用 webRequest.onHeadersReceived 只读观察响应头，记录可下载资源（体积/MIME/文件名）；
+ *  2. 劫持：chrome.downloads.onCreated → cancel + erase，把请求 POST 到云析本地回环桥，
+ *     由云析弹窗询问「保存到哪里 / 用多少线程」，决定后再分流处理；
+ *  3. 归还：用户在云析弹窗点「归还浏览器下载」时，用 chrome.downloads.download 重新发起，
+ *     并对该根域名（eTLD+1）写入 5 分钟冷却，冷却期内不再劫持该域名及以下子域名的下载。
+ *
+ * 与云析的通信：云析在本机 127.0.0.1 的 37021-37030 区间监听（见 App 侧 BrowserBridgeServer）。
+ * 扩展逐个端口 GET /ping 探测，命中后拿到本次进程的随机 token；之后 POST /hook 带 token 提交请求。
+ * 云析没运行时探测不到 → 完全不劫持，浏览器下载照常。
+ */
+
+'use strict';
+
+// ---------------------------------------------------------------- 常量
+
+const PORT_START = 37021;
+const PORT_END = 37030;
+
+/** 归还浏览器下载后的冷却时长（毫秒）：该根域名及以下 5 分钟内不再劫持 */
+const COOLDOWN_MS = 5 * 60 * 1000;
+
+/** 常见二段后缀（eTLD+1 启发式用）：命中时根域名取最后三段 */
+const TWO_LEVEL_TLDS = new Set([
+  'com.cn', 'net.cn', 'org.cn', 'gov.cn', 'edu.cn', 'ac.cn',
+  'co.uk', 'org.uk', 'gov.uk', 'ac.uk', 'me.uk',
+  'co.jp', 'ne.jp', 'or.jp', 'ac.jp',
+  'com.hk', 'com.tw', 'com.au', 'net.au', 'org.au',
+  'com.sg', 'com.my', 'com.ph', 'com.vn', 'com.id', 'com.th',
+  'co.kr', 'co.in', 'co.nz', 'co.za', 'co.il',
+  'com.br', 'com.mx', 'com.ar', 'com.tr', 'com.ua', 'com.ru',
+]);
+
+/** 可下载资源的扩展名特征 */
+const DOWNLOAD_EXT_RE = new RegExp(
+  '\\.(mp4|m4v|mkv|webm|flv|f4v|mov|avi|wmv|ts|m3u8|mpd|mp3|m4a|aac|flac|wav|ogg|opus|' +
+  'zip|rar|7z|tar|gz|bz2|xz|iso|exe|msi|apk|ipa|dmg|pkg|deb|rpm|' +
+  'pdf|epub|mobi|azw3|doc|docx|xls|xlsx|ppt|pptx|torrent|img|bin|dat|jar|crx|' +
+  'ttf|otf|woff|woff2)(\\?|#|$)', 'i');
+
+/** 视为可下载的 MIME */
+const DOWNLOAD_MIME_RE = new RegExp(
+  '^(video/|audio/|font/|application/(octet-stream|x-msdownload|x-msdos-program|' +
+  'x-7z-compressed|x-rar-compressed|x-tar|x-gzip|zip|x-bittorrent|x-apple-diskimage|' +
+  'vnd\\.android\\.package-archive|vnd\\.apple\\.installer|pdf|epub\\+zip|' +
+  'msword|vnd\\.openxmlformats-officedocument|vnd\\.ms-excel|vnd\\.ms-powerpoint))', 'i');
+
+const DEFAULT_SETTINGS = { enabled: true, hijack: true, sniff: true };
+
+// ---------------------------------------------------------------- 状态
+
+/** { port, token } | null */
+let bridge = null;
+/** 每个标签页嗅探到的资源：tabId -> [entry] */
+const tabResources = new Map();
+/** url -> entry（供劫持时补全大小/MIME） */
+const sniffByUrl = new Map();
+
+// ---------------------------------------------------------------- 小工具
+
+const log = (...a) => console.log('[YunX]', ...a);
+
+/** service worker 保活：长时间等待云析弹窗时定期调用一个扩展 API 重置空闲计时器 */
+function keepAlive() {
+  const id = setInterval(() => {
+    try { chrome.runtime.getPlatformInfo(() => void chrome.runtime.lastError); } catch (e) { /* ignore */ }
+  }, 15000);
+  return { stop: () => clearInterval(id) };
+}
+
+/** 根域名（eTLD+1）提取：朴素启发式 + 二段后缀白名单 */
+function rootDomainOf(host) {
+  if (!host) return '';
+  host = String(host).toLowerCase().replace(/\.$/, '');
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return host; // IPv4 原样
+  if (host.startsWith('[')) return host;                 // IPv6
+  const parts = host.split('.');
+  if (parts.length <= 2) return host;
+  const last2 = parts.slice(-2).join('.');
+  if (TWO_LEVEL_TLDS.has(last2)) return parts.slice(-3).join('.');
+  return last2;
+}
+
+function hostOf(url) {
+  try { return new URL(url).hostname; } catch (e) { return ''; }
+}
+
+function fileNameFromUrl(url) {
+  try {
+    const u = new URL(url);
+    const seg = u.pathname.substring(u.pathname.lastIndexOf('/') + 1);
+    const name = decodeURIComponent(seg || '');
+    return name || '';
+  } catch (e) {
+    return '';
+  }
+}
+
+/** 从 Content-Disposition 里取文件名（支持 filename*=UTF-8'' 与 filename="..."） */
+function fileNameFromDisposition(disp) {
+  if (!disp) return '';
+  let m = /filename\*\s*=\s*([^;]+)/i.exec(disp);
+  if (m) {
+    let v = m[1].trim().replace(/^["']|["']$/g, '');
+    const idx = v.indexOf("''");
+    if (idx >= 0) {
+      try { return decodeURIComponent(v.substring(idx + 2)); } catch (e) { /* ignore */ }
+    }
+    return v;
+  }
+  m = /filename\s*=\s*"([^"]*)"/i.exec(disp) || /filename\s*=\s*([^;]+)/i.exec(disp);
+  return m ? m[1].trim() : '';
+}
+
+/** 去掉路径分隔符与非法字符，只保留文件名 */
+function safeFileName(name) {
+  if (!name) return '';
+  return String(name).replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').replace(/^\.+/, '').slice(0, 180);
+}
+
+// ---------------------------------------------------------------- 设置
+
+async function getSettings() {
+  try {
+    const o = await chrome.storage.local.get('settings');
+    return Object.assign({}, DEFAULT_SETTINGS, o.settings || {});
+  } catch (e) {
+    return Object.assign({}, DEFAULT_SETTINGS);
+  }
+}
+
+async function setSettings(patch) {
+  const cur = await getSettings();
+  const next = Object.assign({}, cur, patch);
+  await chrome.storage.local.set({ settings: next });
+  return next;
+}
+
+// ---------------------------------------------------------------- 冷却（归还后 5 分钟内不再劫持该根域名）
+
+function cooldownStore() {
+  return chrome.storage.session || chrome.storage.local;
+}
+
+async function isCoolingDown(root) {
+  if (!root) return false;
+  const key = 'cd:' + root;
+  try {
+    const o = await cooldownStore().get(key);
+    const exp = o[key] || 0;
+    if (exp > Date.now()) return true;
+    if (exp) await cooldownStore().remove(key);
+  } catch (e) { /* ignore */ }
+  return false;
+}
+
+async function setCooldown(root, ms) {
+  if (!root) return;
+  const key = 'cd:' + root;
+  try {
+    await cooldownStore().set({ [key]: Date.now() + (ms || COOLDOWN_MS) });
+    log('归还浏览器下载，冷却根域名', root, '至', new Date(Date.now() + (ms || COOLDOWN_MS)).toLocaleTimeString());
+  } catch (e) { /* ignore */ }
+}
+
+// ---------------------------------------------------------------- 与云析的本地桥
+
+/** 扫描端口区间探测云析；命中后缓存 { port, token } */
+async function ensureBridge(force) {
+  if (bridge && !force) return bridge;
+  bridge = null;
+  for (let p = PORT_START; p <= PORT_END; p++) {
+    try {
+      const r = await fetch('http://127.0.0.1:' + p + '/ping', { method: 'GET', cache: 'no-store' });
+      if (!r.ok) continue;
+      const j = await r.json();
+      if (j && j.app === 'yunx') {
+        bridge = { port: p, token: j.token || '' };
+        log('已连接云析本地桥：端口', p);
+        return bridge;
+      }
+    } catch (e) {
+      // 端口未监听，继续下一个
+    }
+  }
+  return null;
+}
+
+function invalidateBridge() {
+  bridge = null;
+}
+
+/** 用在线状态刷新徽标 */
+function setBadge(text, color) {
+  try {
+    chrome.action.setBadgeText({ text: text || '' });
+    if (text && color) chrome.action.setBadgeBackgroundColor({ color });
+  } catch (e) { /* ignore */ }
+}
+
+/** 组装 Cookie 头 */
+async function cookieHeader(url) {
+  try {
+    const list = await chrome.cookies.getAll({ url });
+    if (!list || !list.length) return '';
+    return list.map((c) => c.name + '=' + c.value).join('; ');
+  } catch (e) {
+    return '';
+  }
+}
+
+/** 组装发给云析的请求体 */
+async function buildPayload(info) {
+  const url = info.url;
+  const host = hostOf(url);
+  const sniffed = sniffByUrl.get(url) || null;
+  let size = info.fileSize;
+  if (size == null || size <= 0) size = sniffed && sniffed.size > 0 ? sniffed.size : -1;
+  const fileName = safeFileName(info.fileName || (sniffed && sniffed.fileName) || fileNameFromUrl(url));
+  return {
+    url: url,
+    fileName: fileName,
+    fileSize: size,
+    pageUrl: info.pageUrl || '',
+    referer: info.referer || info.pageUrl || '',
+    userAgent: (self.navigator && self.navigator.userAgent) || '',
+    cookie: await cookieHeader(url),
+    mime: info.mime || (sniffed && sniffed.mime) || '',
+    rootDomain: rootDomainOf(host),
+  };
+}
+
+/**
+ * POST /hook：把请求交给云析弹窗，挂起等待用户决定（云析侧最长等 120 秒，超时按「归还」处理）。
+ * @returns {Promise<{action:'accept'|'cancel'|'return', saveDir?:string, threads?:number}>}
+ */
+async function postHook(payload) {
+  const b = await ensureBridge(false);
+  if (!b) return { action: 'return' };
+  const keep = keepAlive();
+  try {
+    const r = await fetch('http://127.0.0.1:' + b.port + '/hook', {
+      method: 'POST',
+      cache: 'no-store',
+      headers: { 'Content-Type': 'application/json', 'X-YunX-Token': b.token },
+      body: JSON.stringify(payload),
+    });
+    if (r.status === 401) { invalidateBridge(); return { action: 'return' }; }
+    if (!r.ok) return { action: 'return' };
+    const d = await r.json();
+    if (d && (d.action === 'accept' || d.action === 'cancel' || d.action === 'return')) return d;
+    return { action: 'return' };
+  } catch (e) {
+    log('hook 失败：', e && e.message);
+    invalidateBridge();
+    return { action: 'return' };
+  } finally {
+    keep.stop();
+  }
+}
+
+/** 归还浏览器下载：重新发起下载（带 Referer，失败则退回不带请求头） */
+async function redownload(payload) {
+  const base = { url: payload.url, conflictAction: 'uniquify' };
+  if (payload.fileName) base.filename = 'YunX/' + payload.fileName;
+  const headers = [];
+  if (payload.referer) headers.push({ name: 'Referer', value: payload.referer });
+  try {
+    if (headers.length) await chrome.downloads.download(Object.assign({ headers }, base));
+    else await chrome.downloads.download(base);
+  } catch (e) {
+    try { await chrome.downloads.download(base); } catch (e2) { log('归还下载失败：', e2 && e2.message); }
+  }
+}
+
+// ---------------------------------------------------------------- 通用下载流程
+
+/**
+ * 走一遍「交给云析 → 按决定分流」的流程。
+ * @param info {url, fileName?, fileSize?, pageUrl?, referer?, mime?}
+ * @returns 决定结果
+ */
+async function handOverToYunx(info) {
+  const payload = await buildPayload(info);
+  const decision = await postHook(payload);
+  if (decision.action === 'accept') {
+    setBadge('✓', '#2e86ff');
+    setTimeout(() => setBadge(''), 3000);
+    log('已交给云析下载', payload.fileName, decision.threads ? '(' + decision.threads + ' 线程)' : '');
+  } else if (decision.action === 'return') {
+    await setCooldown(payload.rootDomain);
+    await redownload(payload);
+  }
+  // cancel：用户主动放弃，不重新下载
+  return decision;
+}
+
+// ---------------------------------------------------------------- 嗅探（响应头观察）
+
+chrome.webRequest.onHeadersReceived.addListener(
+  (details) => {
+    if (details.tabId < 0) return;
+    const url = details.url;
+    if (!/^https?:/i.test(url)) return;
+
+    let mime = '';
+    let size = -1;
+    let disp = '';
+    for (const h of details.responseHeaders || []) {
+      const n = h.name.toLowerCase();
+      if (n === 'content-type') mime = String(h.value || '').split(';')[0].trim();
+      else if (n === 'content-length') { const v = parseInt(h.value, 10); if (!isNaN(v)) size = v; }
+      else if (n === 'content-disposition') disp = String(h.value || '');
+    }
+
+    const clean = url.split('?')[0].split('#')[0];
+    const looksDownloadable =
+      DOWNLOAD_EXT_RE.test(clean) || DOWNLOAD_MIME_RE.test(mime) || /attachment/i.test(disp);
+    if (!looksDownloadable) return;
+
+    const entry = {
+      url: url,
+      fileName: fileNameFromDisposition(disp) || fileNameFromUrl(url),
+      mime: mime,
+      size: size,
+      source: 'net',
+      time: Date.now(),
+    };
+    rememberSniff(details.tabId, entry);
+  },
+  { urls: ['http://*/*', 'https://*/*'] },
+  ['responseHeaders']
+);
+
+function rememberSniff(tabId, entry) {
+  sniffByUrl.set(entry.url, entry);
+  if (sniffByUrl.size > 2000) {
+    const oldest = sniffByUrl.keys().next().value;
+    if (oldest) sniffByUrl.delete(oldest);
+  }
+  let arr = tabResources.get(tabId);
+  if (!arr) { arr = []; tabResources.set(tabId, arr); }
+  if (!arr.some((e) => e.url === entry.url)) {
+    arr.unshift(entry);
+    while (arr.length > 300) arr.pop();
+  }
+}
+
+// ---------------------------------------------------------------- 劫持浏览器下载
+
+chrome.downloads.onCreated.addListener((item) => {
+  void onDownloadCreated(item);
+});
+
+async function onDownloadCreated(item) {
+  try {
+    // 自己用 downloads.download 重发的（归还 / 手动下载）放行，避免死循环
+    if (item.byExtensionId && item.byExtensionId === chrome.runtime.id) return;
+    const url = item.finalUrl || item.url || '';
+    if (!/^https?:/i.test(url)) return;
+
+    const st = await getSettings();
+    if (!st.enabled || !st.hijack) return;
+
+    const root = rootDomainOf(hostOf(url));
+    if (await isCoolingDown(root)) return; // 刚归还过，5 分钟内不再劫持
+
+    // 探测云析；没运行就完全不干预浏览器下载
+    const b = await ensureBridge(false);
+    if (!b) return;
+
+    // 等待期间可能已经下完了（小文件），已下完的不抢
+    const found = await chrome.downloads.search({ id: item.id });
+    const cur = found && found[0];
+    if (!cur || cur.state !== 'in_progress') return;
+
+    // 劫持：取消浏览器下载并抹掉记录
+    chrome.downloads.cancel(item.id, () => {
+      void chrome.runtime.lastError;
+      chrome.downloads.erase({ id: item.id }, () => void chrome.runtime.lastError);
+    });
+
+    const sniffed = sniffByUrl.get(url) || null;
+    await handOverToYunx({
+      url: url,
+      fileName: sniffed && sniffed.fileName ? sniffed.fileName : fileNameFromUrl(url),
+      fileSize: item.fileSize > 0 ? item.fileSize : (sniffed ? sniffed.size : -1),
+      pageUrl: item.referrer || '',
+      referer: item.referrer || '',
+      mime: item.mime || (sniffed ? sniffed.mime : ''),
+    });
+  } catch (e) {
+    log('劫持异常：', e && e.message);
+  }
+}
+
+// ---------------------------------------------------------------- 右键菜单
+
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.contextMenus.removeAll(() => {
+    void chrome.runtime.lastError;
+    chrome.contextMenus.create({ id: 'yunx-link', title: '用云析下载此链接', contexts: ['link'] });
+    chrome.contextMenus.create({ id: 'yunx-media', title: '用云析下载此资源', contexts: ['video', 'audio'] });
+    chrome.contextMenus.create({ id: 'yunx-image', title: '用云析下载此图片', contexts: ['image'] });
+  });
+});
+
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+  const url = info.linkUrl || info.srcUrl || '';
+  if (!/^https?:/i.test(url)) return;
+  const st = await getSettings();
+  if (!st.enabled) return;
+  await handOverToYunx({
+    url: url,
+    pageUrl: (tab && tab.url) || info.pageUrl || '',
+    referer: (tab && tab.url) || info.pageUrl || '',
+  });
+});
+
+// ---------------------------------------------------------------- 标签页清理
+
+chrome.tabs.onRemoved.addListener((tabId) => tabResources.delete(tabId));
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo && changeInfo.status === 'loading' && changeInfo.url) tabResources.delete(tabId);
+});
+
+// ---------------------------------------------------------------- 消息（popup / content script）
+
+/** 合并网络嗅探 + 页面 DOM 收集到的资源 */
+async function collectResources(tabId) {
+  const net = (tabResources.get(tabId) || []).slice();
+  let dom = [];
+  if (tabId >= 0) {
+    dom = await new Promise((resolve) => {
+      try {
+        chrome.tabs.sendMessage(tabId, { type: 'yunx-dom-resources' }, (resp) => {
+          if (chrome.runtime.lastError) { resolve([]); return; }
+          resolve((resp && resp.resources) || []);
+        });
+      } catch (e) {
+        resolve([]);
+      }
+    });
+  }
+  const seen = new Set();
+  const out = [];
+  for (const e of net.concat(dom)) {
+    if (!e || !e.url || seen.has(e.url)) continue;
+    seen.add(e.url);
+    // DOM 缺大小 → 用网络嗅探补齐
+    if ((e.size == null || e.size <= 0) && sniffByUrl.has(e.url)) e.size = sniffByUrl.get(e.url).size;
+    out.push(e);
+  }
+  return out;
+}
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (!msg || !msg.type) return;
+
+  if (msg.type === 'yunx-get-settings') {
+    getSettings().then((s) => sendResponse({ ok: true, settings: s }));
+    return true;
+  }
+
+  if (msg.type === 'yunx-set-settings') {
+    setSettings(msg.settings || {}).then((s) => sendResponse({ ok: true, settings: s }));
+    return true;
+  }
+
+  if (msg.type === 'yunx-status') {
+    ensureBridge(true).then((b) => {
+      setBadge(b ? '' : '');
+      sendResponse({ ok: true, connected: !!b, port: b ? b.port : 0 });
+    });
+    return true;
+  }
+
+  if (msg.type === 'yunx-get-resources') {
+    const tabId = typeof msg.tabId === 'number' ? msg.tabId : -1;
+    collectResources(tabId).then((list) => sendResponse({ ok: true, resources: list }));
+    return true;
+  }
+
+  if (msg.type === 'yunx-download') {
+    (async () => {
+      const st = await getSettings();
+      if (!st.enabled) { sendResponse({ ok: false, error: '插件未启用' }); return; }
+      const d = await handOverToYunx({
+        url: msg.url,
+        fileName: msg.fileName || '',
+        fileSize: typeof msg.size === 'number' ? msg.size : -1,
+        pageUrl: msg.pageUrl || '',
+        referer: msg.pageUrl || '',
+        mime: msg.mime || '',
+      });
+      sendResponse({ ok: true, action: d.action });
+    })();
+    return true;
+  }
+});

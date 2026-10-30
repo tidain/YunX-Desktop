@@ -739,6 +739,8 @@ class DownloadManager(
         mergeAudioHeaders: Map<String, String> = emptyMap(),
         /** 动图资源地址（Motion Photo 合成用）；空串 = 普通静图，见 [motionPhotoDownload] */
         motionUrl: String = "",
+        /** 本任务的下载线程数覆盖（浏览器插件按用户弹窗选择传入）；0 = 跟随平台的线程数设置 */
+        threads: Int = 0,
         /** 下载成功完成后的清理回调（如删除网盘临时转存文件）；失败/取消不触发。
          * 注意：必须是最后一个参数（调用点有大量尾随 lambda 用法，放它之后会编译失败）。 */
         onComplete: suspend () -> Unit = {}
@@ -777,7 +779,8 @@ class DownloadManager(
                         } else {
                             encodeHeaders(mergeAudioHeaders, "download.mergeAudioHeaders")
                         },
-                        motionUrl = motionUrl.trim()
+                        motionUrl = motionUrl.trim(),
+                        threads = threads.coerceAtLeast(0)
                     )
                 )
             }
@@ -1166,6 +1169,10 @@ class DownloadManager(
     private fun effectiveSaveDir(task: DownloadTaskEntity): String? =
         task.saveDir.takeIf { it.isNotBlank() } ?: saveDirProvider()
 
+    /** 任务实际使用的分片线程数：任务级覆盖优先（浏览器插件弹窗选择），0 = 跟随平台设置 */
+    private fun threadsFor(task: DownloadTaskEntity): Int =
+        if (task.threads > 0) task.threads else threadProvider(task.platform)
+
     /** 新建引擎任务（enqueue 的引擎分流入口） */
     private suspend fun startViaEngine(
         id: Long,
@@ -1366,7 +1373,7 @@ class DownloadManager(
                             it + (task.id to DownloadStats(
                                 speed = view.speed,
                                 remainMillis = remain,
-                                chunkCount = realConnections ?: threadProvider(task.platform)
+                                chunkCount = realConnections ?: threadsFor(task)
                             ))
                         }
                         notifyProgress(task.id, task.fileName, view.downloaded, view.total)
@@ -1701,7 +1708,7 @@ class DownloadManager(
             ?: taskSizes[id]?.takeIf { it > 0 }
         // 实验性直写：优先按任务已记录的模式恢复；新任务再按开关 + 线程数选择。
         // 已存在的直写临时文件是上次暂停/失败留下的，不能因为用户后来关掉开关就丢掉。
-        val threadCountForMode = threadProvider(task.platform).coerceAtLeast(1)
+        val threadCountForMode = threadsFor(task).coerceAtLeast(1)
         if (task.directPart.isNotBlank() &&
             (task.directMode !in 1..2 || !File(task.directPart).isFile)
         ) {
@@ -1821,7 +1828,7 @@ class DownloadManager(
         // 取到大小后再次检查取消（暂停可能发生在 getTotalSize 期间）
         if (!isTaskActive()) return
 
-        val threadCount = threadProvider(task.platform).coerceAtLeast(1)
+        val threadCount = threadsFor(task).coerceAtLeast(1)
         val chunkDir = chunkDirOf(id).apply { mkdirs() }
         // 分片级校验：本次运行内记录每个分片下载时算出的摘要，合并时逐片重算比对（下面清空旧分片时会一并清掉）
         val partDigests = ConcurrentHashMap<String, String>()
@@ -3104,7 +3111,7 @@ class DownloadManager(
         }
         val part = loc.partFile
         val destDir = part.parentFile ?: throw IllegalStateException("直写：目标目录不可用")
-        val threadCount = threadProvider(task.platform).coerceAtLeast(2)
+        val threadCount = threadsFor(task).coerceAtLeast(2)
         // 迅雷 CDN 对单文件并发 Range 有阈值（与缓存路径同一套限制），直写也必须钳到安全上限
         val isXunlei = headers["User-Agent"]?.contains("xunlei", ignoreCase = true) == true ||
             task.url.contains("xunlei", ignoreCase = true)

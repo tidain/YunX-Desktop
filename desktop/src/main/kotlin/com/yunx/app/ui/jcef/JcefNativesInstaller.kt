@@ -2,7 +2,7 @@ package com.yunx.app.ui.jcef
 
 import com.yunx.app.util.Log
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
-import org.tukaani.xz.XZInputStream
+import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream
 import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileInputStream
@@ -12,7 +12,7 @@ import java.io.FileOutputStream
  * JCEF 原生库的「首次使用自解包」。
  *
  * 发布包不再随带 `jcef-natives-*.jar`（其中的 tar.gz 有 120MB），而是带一份
- * `app\jcef-natives.tar.xz`（同一批文件，LZMA2 压到约 90MB）。本类负责：
+ * `app\jcef-natives.tar.gz`（同一批文件，只是语言包裁到只剩 zh-CN）。本类负责：
  * 1. 把压缩包解到 jcefmaven 的 installDir（`<缓存>/jcef-bundle`）；
  * 2. 写 `install.lock` 与就绪标记（记录压缩包大小/时间，升级包换了自动重解）；
  * 3. 之后调用方用 `CefAppBuilder.setSkipInstallation(true)` 让 jcefmaven 跳过它自己的
@@ -26,7 +26,7 @@ object JcefNativesInstaller {
     private const val TAG = "YunX-Jcef"
 
     /** 随包分发的压缩包文件名（与 portable-package.ps1 产出一致） */
-    private const val ARCHIVE_NAME = "jcef-natives.tar.xz"
+    private const val ARCHIVE_NAME = "jcef-natives.tar.gz"
 
     /** 就绪标记：内容为解包时的「压缩包大小-修改时间」，压缩包变了就重解 */
     private const val READY_MARKER = ".yunx-natives-ready"
@@ -107,7 +107,7 @@ object JcefNativesInstaller {
     }
 
     /**
-     * 解包（tar + xz）。条目名以 `./` 开头，落盘前统一规范化并拒绝越界路径。
+     * 解包（tar + gzip）。条目名以 `./` 开头，落盘前统一规范化并拒绝越界路径。
      *
      * ★ 原子化：先解到同级的临时目录 `<installDir>.extracting`，把 install.lock / 就绪标记 / 清单
      *   都写好后，再把临时目录整体重命名到 [installDir]。这样即使中途被中断（覆盖安装双开、进程被杀），
@@ -122,8 +122,8 @@ object JcefNativesInstaller {
         if (!temp.mkdirs() && !temp.isDirectory) error("无法创建临时解包目录: ${temp.absolutePath}")
         val root = temp.canonicalFile
         val manifest = StringBuilder()
-        XZInputStream(BufferedInputStream(FileInputStream(archive), BUFFER_SIZE)).use { xz ->
-            TarArchiveInputStream(xz).use { tar ->
+        GzipCompressorInputStream(BufferedInputStream(FileInputStream(archive), BUFFER_SIZE)).use { gz ->
+            TarArchiveInputStream(gz).use { tar ->
                 var written = 0L
                 while (true) {
                     val entry = tar.nextEntry ?: break

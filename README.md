@@ -7,7 +7,8 @@
 **粘贴分享链接，直接高速下载 —— 云析 YunX 官方 Windows 桌面版**
 
 网盘：夸克 / UC / 迅雷 / 百度 / 139 / 123 / 115 / 光鸭 / 蓝奏云 / 蓝奏云优享版；
-视频：哔哩哔哩 / 小红书 / 抖音 / 微博 / 快手 / AcFun / Pixiv。Range 分片并发 + 断点续传，B 站高清自动合轨。
+视频：哔哩哔哩 / 小红书 / 抖音 / 微博 / 快手 / AcFun / Pixiv；另支持磁力 / BT 种子 / ed2k 等 P2P 链接。
+Range 分片并发 + 断点续传，B 站高清自动合轨。
 
 [![Release](https://img.shields.io/github/v/release/tidain/YunX-Desktop?style=flat-square\&label=release\&color=4C8BF5)](https://github.com/tidain/YunX-Desktop/releases/latest)
 [![Stars](https://img.shields.io/github/stars/tidain/YunX-Desktop?style=flat-square\&logo=github\&color=4C8BF5)](https://github.com/tidain/YunX-Desktop/stargazers)
@@ -30,7 +31,8 @@
 
 ## 简介
 
-云析 YunX 的 **官方 Windows 桌面版**：粘贴**网盘分享链接**或**视频作品链接**，即可浏览内容、在线预览并直接高速下载，全程在电脑上完成。
+云析 YunX 的 **官方 Windows 桌面版**：粘贴**网盘分享链接**或**视频作品链接**，即可浏览内容、在线预览并直接高速下载，全程在电脑上完成；
+也支持**磁力 / BT 种子 / ed2k** 等 P2P 链接下载。
 网盘与视频平台都支持多账号（主账号 / 备注），登录凭证加密存本机，并可导出加密备份换机恢复。
 提供**免安装便携版**（整个文件夹拷走即用）与**安装版**（开始菜单 / 桌面快捷方式，可卸载）两种分发形式。
 
@@ -67,6 +69,8 @@
 
 - 视频解析：抖音 / 快手 / 微博 / 小红书 / 哔哩哔哩 / AcFun / Pixiv
 
+- 磁力 / BT 种子 / ed2k（P2P 下载，可导入本地种子文件）
+
 > \[!WARNING]
 > **不建议使用百度网盘，可能导致账号被风控！**
 
@@ -89,6 +93,8 @@
 - **视频解析与预览** —— 粘贴抖音 / 快手 / 微博 / 小红书 / B站 / AcFun / Pixiv 作品链接（短链、口令、整段文案均可）即可解析；在线预览优先用 **ffplay** 直读直链（真·边下边播，HLS 原生支持），本机没装 FFmpeg 时回退内置播放器并可一键下载引擎到应用私有目录（不改系统环境变量）；图集可放大查看，下载支持 DASH 合轨（优先 ffmpeg `-c copy`）与 Live Photo 动图合成（可存动态照片 / 静图 / 视频）
 
 - **高速下载** —— Range 分片并发 + 断点续传 + 慢连接自动换线 + 全局限速；B 站高清分轨两轨并行下载后自动合轨
+
+- **P2P 下载** —— 磁力 / BT 种子 / ed2k 电驴链接交给 Gopeed 引擎下载；支持导入本地 `.torrent` 种子文件、BT Tracker 服务器二级页管理与 DHT 开关，下载中可查看「种子 / 连接 / 节点」概览
 
 - **GitHub 浏览与 README 渲染** —— 浏览仓库文件树 / Releases / 账号仓库列表，README 与更新说明以 GFM Markdown 渲染
 

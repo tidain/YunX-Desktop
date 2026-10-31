@@ -335,10 +335,11 @@ object GopeedEngine {
     /**
      * 新建下载任务。
      * @param saveDir 落盘目录（**真实文件系统绝对路径**，引擎写不了虚拟路径）
-     * @param fileName 落盘文件名（引擎自己拼 `saveDir/fileName`）
+     * @param fileName 落盘文件名（引擎自己拼 `saveDir/fileName`）；BT（磁力/种子）传空串，由引擎按元数据命名
      * @param headers 请求头（网盘直链需要 UA/Referer/Cookie）
-     * @param connections 分片并发连接数（<=0 时不写，用引擎默认）
+     * @param connections 分片并发连接数（<=0 时不写，用引擎默认）；BT 不吃这个参数
      * @param label 业务标签（这里放本地任务 id，便于引擎侧排查）
+     * @param trackers BT 任务的 tracker 列表（写进 `req.extra.trackers`，与全局 customTrackers 双保险）
      * @return 引擎任务 ID
      */
     fun createTask(
@@ -347,13 +348,20 @@ object GopeedEngine {
         fileName: String,
         headers: Map<String, String> = emptyMap(),
         connections: Int = 0,
-        label: String = ""
+        label: String = "",
+        trackers: List<String> = emptyList()
     ): String {
         val req = JSONObject().apply {
             put("url", url)
-            if (headers.isNotEmpty()) {
+            // BT 的 req.extra 是 {trackers:[...]}，HTTP 的 req.extra 是 {header:{...}}：按需组装，互不影响
+            if (headers.isNotEmpty() || trackers.isNotEmpty()) {
                 put("extra", JSONObject().apply {
-                    put("header", JSONObject().apply { headers.forEach { (k, v) -> put(k, v) } })
+                    if (headers.isNotEmpty()) {
+                        put("header", JSONObject().apply { headers.forEach { (k, v) -> put(k, v) } })
+                    }
+                    if (trackers.isNotEmpty()) {
+                        put("trackers", JSONArray().apply { trackers.forEach { put(it) } })
+                    }
                 })
             }
             if (label.isNotBlank()) {
@@ -404,11 +412,53 @@ object GopeedEngine {
     }
 
     /**
+     * 引擎任务的失败详情（`GET /api/v1/tasks/{id}`）。
+     *
+     * Gopeed 的 Task 对象里带 `error` 字段（失败时的原始原因），但它**只存在 REST 响应里**——
+     * 子进程日志只有启动 banner，不记任务级错误。取不到 `error` 时兜底返回整份 JSON，
+     * 保证日志里一定能看到引擎给出的原因（否则只剩「引擎下载失败」这种没信息量的统一文案）。
+     */
+    fun taskError(engineTaskId: String): String? = runCatching {
+        val data = get("/api/v1/tasks/$engineTaskId")
+        data.optString("error").trim().ifEmpty { data.optString("err").trim() }
+            .ifEmpty { data.toString() }
+    }.getOrNull()
+
+    /**
      * 该任务**实际**的并发连接数（`GET /api/v1/tasks/{id}/stats` 的 `connections` 数组长度）。
      * 配置里传了 32 不等于引擎真的开了 32 条连接：界面用真实值显示，取不到返回 null（回退到配置值）。
      */
     fun taskConnections(engineTaskId: String): Int? = runCatching {
         get("/api/v1/tasks/$engineTaskId/stats").optJSONArray("connections")?.length()
+    }.getOrNull()
+
+    /**
+     * P2P 任务的 peer 概览（BT 磁力/种子 / ed2k）。
+     *
+     * `GET /api/v1/tasks/{id}/stats` 的 `data` 是 `{snapshot, runtime}`：
+     * - BT：runtime = `{totalPeers, activePeers, connectedSeeders, connectedLeechers, peers[]}`；
+     * - ed2k：runtime = `{activePeers, totalPeers, peers[]}`（没有 seeds 概念，`seeds` 记 -1）；
+     * - HTTP：没有 runtime（连接信息是 `snapshot.connections`），这里返回 null。
+     *
+     * 取不到的字段一律记 -1，UI 据此决定要不要显示（不显示比显示个假的 0 诚实）。
+     */
+    data class PeerInfo(
+        /** 已连接的做种者数（BT 有，ed2k 无 → -1） */
+        val seeds: Int,
+        /** 当前活跃 peer 连接数 */
+        val peers: Int,
+        /** 已知 peer 总数（含未连接的） */
+        val total: Int
+    )
+
+    fun taskPeerInfo(engineTaskId: String): PeerInfo? = runCatching {
+        val data = get("/api/v1/tasks/$engineTaskId/stats")
+        // 兼容：老版本内核可能把字段平铺在 data 上而非包在 runtime 里
+        val rt = data.optJSONObject("runtime") ?: data
+        val seeds = rt.optInt("connectedSeeders", -1)
+        val peers = rt.optInt("activePeers", -1)
+        val total = rt.optInt("totalPeers", -1)
+        if (seeds < 0 && peers < 0 && total < 0) null else PeerInfo(seeds, peers, total)
     }.getOrNull()
 
     /**
@@ -514,11 +564,17 @@ object GopeedEngine {
         val cfg = getConfig()
         cfg.put("maxRunning", value)
         val protocols = cfg.optJSONObject("protocolConfig") ?: JSONObject()
-        // BT 不做种
+        // BT：不做种 + tracker 列表 + DHT 开关
         val bt = protocols.optJSONObject("bt") ?: JSONObject()
         bt.put("seedKeep", false)
         bt.put("seedRatio", 0)
         bt.put("seedTime", 1)
+        // tracker 列表：内置优质默认列表（用户可在「下载引擎」页自定义）。
+        // 公网磁力/种子在 DHT 受限（运营商封 UDP、无公网 IP）时全靠它找到 peer —— 缺了它就会一直「解析中」。
+        val trackers = settings.resolvedBtTrackers()
+        bt.put("customTrackers", JSONArray().apply { trackers.forEach { put(it) } })
+        // DHT：默认开（disableDht=false）。关掉后只靠 tracker/PEX 找 peer。
+        bt.put("disableDht", !settings.btDhtEnabled)
         protocols.put("bt", bt)
         // HTTP 全局连接数：对齐设置里的「下载线程数（通用）」。引擎自带的默认只有 16，
         // 且任务级 opts.extra.connections 才是最终生效值——这里只是兜底，保证任何任务都不会退化成低连接。
@@ -583,11 +639,12 @@ object GopeedEngine {
     }
 
     /**
-     * 影响「引擎运行配置」的设置签名（并发上限之外的部分：连接数、代理）。
+     * 影响「引擎运行配置」的设置签名（并发上限之外的部分：连接数、代理、BT tracker/DHT）。
      * 调用方把它与并发上限拼成缓存键：任一项在设置里改了都要重新下发，而不是只在并发数变化时。
      */
     fun settingsSignature(): String = runCatching {
-        "${defaultHttpConnections()}|${settings.proxyMode}|${settings.proxyHost}|${settings.proxyPort}"
+        "${defaultHttpConnections()}|${settings.proxyMode}|${settings.proxyHost}|${settings.proxyPort}" +
+            "|${settings.btDhtEnabled}|${settings.btTrackers}"
     }.getOrDefault("")
 
     /**

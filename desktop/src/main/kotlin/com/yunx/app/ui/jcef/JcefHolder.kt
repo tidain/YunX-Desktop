@@ -67,7 +67,7 @@ object JcefHolder {
                     val builder = CefAppBuilder()
                     val installDir = File(AppContext.cacheDir, "jcef-bundle")
                     builder.setInstallDir(installDir)
-                    // 发布包带的是 app\jcef-natives.tar.xz（不含原生 jar）：
+                    // 发布包带的是 app\jcef-natives.tar.gz（不含原生 jar）：
                     // 自己解包到 installDir 后让 jcefmaven 跳过安装步骤。开发运行无此压缩包，
                     // ensureInstalled 返回 false，仍由 jcefmaven 从 classpath 的原生 jar 安装。
                     if (JcefNativesInstaller.ensureInstalled(installDir)) {

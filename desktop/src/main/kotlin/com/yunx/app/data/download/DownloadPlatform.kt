@@ -22,6 +22,8 @@ object DownloadPlatform {
     const val LANZOU = "lanzou"
     /** 磁力链接（BT）：只能交给 Gopeed 引擎，内置分片下载器不支持 */
     const val MAGNET = "magnet"
+    /** ed2k 链接：同样只有 Gopeed 引擎里有实现，内置分片下载器不支持 */
+    const val ED2K = "ed2k"
     /** GitHub 仓库/Release 下载 */
     const val GITHUB = "github"
     /** 通用/未知来源（手动添加、应用更新下载等） */

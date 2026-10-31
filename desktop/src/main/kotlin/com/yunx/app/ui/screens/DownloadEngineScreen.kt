@@ -29,6 +29,7 @@ import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.PlayCircleOutline
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Speed
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.UploadFile
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -44,6 +45,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -115,6 +117,12 @@ fun DownloadEngineScreen(
     // 「导入本地内核」与「删除内核」的确认
     var showImportMenu by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
+
+    // BT（磁力 / 种子）连接配置：DHT 开关 + tracker 列表（留空 = 用内置默认列表）
+    var btDht by remember { mutableStateOf(settingsRepo.btDhtEnabled) }
+    var btTrackers by remember { mutableStateOf(settingsRepo.btTrackers) }
+    // Tracker 服务器二级页（逐条增删/管理，替代原来的多行文本框弹窗）
+    var showTrackerPage by remember { mutableStateOf(false) }
 
     // 视频预览引擎（实验性）：auto / javafx / ffplay + 本机 ffplay 状态与下载进度
     var previewEngine by remember { mutableStateOf(settingsRepo.previewEngine) }
@@ -303,6 +311,13 @@ fun DownloadEngineScreen(
         }
     }
 
+    // Tracker 服务器二级页：整页替换（与下载页的调试页同一套做法），逐条增删/管理，
+    // 不再用一个多行文本框让人一行行改。
+    if (showTrackerPage) {
+        TrackerListScreen(onBack = { showTrackerPage = false })
+        return
+    }
+
     Scaffold(
         modifier = modifier.fillMaxSize(),
         snackbarHost = { GlobalSnackbarHost() },
@@ -454,6 +469,73 @@ fun DownloadEngineScreen(
                         Spacer(Modifier.width(6.dp))
                         Text("删除内核", color = MaterialTheme.colorScheme.error)
                     }
+                }
+
+                // BT 连接（DHT + tracker）是 Gopeed 引擎专属：只有当前引擎就是 Gopeed 时才显示，
+                // 切到内置下载器时整块隐藏——内置下载器是纯 HTTP Range 实现，这些设置对它毫无作用。
+                if (currentEngine == SettingsRepository.ENGINE_GOPEED) {
+                // ===== BT 连接（磁力 / ed2k / 种子）：DHT + tracker 列表 =====
+                Spacer(Modifier.height(14.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    text = "BT 连接（磁力 / 种子）",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = "磁力 / ed2k / BT 种子靠 tracker 与 DHT 找到 peer：tracker 越全越容易连上，" +
+                        "DHT 打开后即使 tracker 全部失效也能靠 DHT 找种。修改后对**新任务**生效。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(10.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("DHT 网络", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            text = "无需 tracker 也能找种，建议开启",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = btDht,
+                        onCheckedChange = {
+                            btDht = it
+                            settingsRepo.btDhtEnabled = it
+                            SnackbarController.show(if (it) "已开启 DHT" else "已关闭 DHT（仅靠 tracker / PEX）")
+                        }
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                KeyValueRow(
+                    "Tracker",
+                    "${settingsRepo.resolvedBtTrackers().size} 条" +
+                        if (btTrackers.isBlank()) "（内置默认列表）" else "（自定义）"
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = { showTrackerPage = true },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Outlined.Tune, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("管理 Tracker 服务器")
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            settingsRepo.btTrackers = ""
+                            btTrackers = ""
+                            SnackbarController.show("已恢复内置默认 tracker 列表")
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("恢复默认")
+                    }
+                }
                 }
             }
 

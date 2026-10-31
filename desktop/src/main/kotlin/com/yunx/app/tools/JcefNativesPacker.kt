@@ -4,25 +4,25 @@ import org.apache.commons.compress.archivers.tar.TarArchiveEntry
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream
 import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream
-import org.tukaani.xz.LZMA2Options
-import org.tukaani.xz.X86Options
-import org.tukaani.xz.XZOutputStream
+import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream
+import org.apache.commons.compress.compressors.gzip.GzipParameters
 import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.util.zip.ZipFile
 
 /**
- * 打包期工具（不参与运行）：把 jcef 原生包 jar 里内嵌的 `tar.gz` 重压成 `tar.xz`。
+ * 打包期工具（不参与运行）：把 jcef 原生包 jar 里内嵌的 `tar.gz` 重打成发布用的 `tar.gz`。
  *
- * 为什么这么做：CEF 原生库是发布包里最大的一块（解包后 261MB，官方 jar 内 gzip 后 120MB）。
- * 换成 LZMA2 后同一批文件约 90MB，**内容一个不少**，只是压缩率更高。
+ * 为什么这么做：CEF 原生库是发布包里最大的一块（解包后 261MB，官方 jar 内 gzip 后约 120MB）。
+ * 这里**沿用 gzip**（不用 LZMA2/xz），把 Chromium 的语言包裁到只剩 `zh-CN`（应用固定
+ * `settings.locale = "zh-CN"`，其余语言包永远不会被加载），其余文件一个不少。
  * 运行期由 [com.yunx.app.ui.jcef.JcefNativesInstaller] 解开，再让 jcefmaven 跳过它自己的安装步骤。
  *
- * 顺带把 Chromium 的语言包裁到只剩 `zh-CN`（应用固定 `settings.locale = "zh-CN"`，
- * 其余语言包永远不会被加载），原先这一步由 portable-package.ps1 里的 tar 拆包/回包完成。
+ * 说明：早前这里用 xz(LZMA2+BCJ) 换来更高压缩率，但实测它对内嵌浏览器并不友好，故换回 gzip ——
+ * 压缩率略低，但解压路径更稳（不再依赖额外的 xz 解压实现）。
  *
- * 用法：`JcefNativesPacker <jcef-natives-*.jar> <out.tar.xz>`
+ * 用法：`JcefNativesPacker <jcef-natives-*.jar> <out.tar.gz>`
  */
 object JcefNativesPacker {
 
@@ -31,7 +31,7 @@ object JcefNativesPacker {
 
     @JvmStatic
     fun main(args: Array<String>) {
-        require(args.size >= 2) { "用法: JcefNativesPacker <jcef-natives-*.jar> <out.tar.xz>" }
+        require(args.size >= 2) { "用法: JcefNativesPacker <jcef-natives-*.jar> <out.tar.gz>" }
         val jar = File(args[0])
         val out = File(args[1])
         require(jar.isFile) { "原生包不存在: $jar" }
@@ -44,14 +44,12 @@ object JcefNativesPacker {
             zip.getInputStream(entry).use { rawIn ->
                 GzipCompressorInputStream(rawIn, true).use { gzipIn ->
                     TarArchiveInputStream(gzipIn).use { tarIn ->
-                        val xzOut = XZOutputStream(
+                        val gzOut = GzipCompressorOutputStream(
                             BufferedOutputStream(FileOutputStream(out), BUFFER_SIZE),
-                            // BCJ(x86) 前置滤波器：libcef.dll 这类 PE 文件能再小 1~2%，
-                            // 对非代码数据基本无影响（与 `xz --x86` 同一做法）
-                            arrayOf(X86Options(), LZMA2Options(PRESET))
+                            GzipParameters().apply { compressionLevel = COMPRESSION_LEVEL }
                         )
-                        xzOut.use { xz ->
-                            TarArchiveOutputStream(xz).use { tarOut ->
+                        gzOut.use { gz ->
+                            TarArchiveOutputStream(gz).use { tarOut ->
                                 tarOut.setLongFileMode(TarArchiveOutputStream.LONGFILE_POSIX)
                                 while (true) {
                                     val entryIn = tarIn.nextEntry ?: break
@@ -78,7 +76,7 @@ object JcefNativesPacker {
         }
         println(
             "jcef natives repacked: ${out.name} ${out.length() / 1024 / 1024} MB " +
-                "(from ${jar.name} ${jar.length() / 1024 / 1024} MB, $files files, preset $PRESET)"
+                "(from ${jar.name} ${jar.length() / 1024 / 1024} MB, $files files, gzip level $COMPRESSION_LEVEL)"
         )
     }
 
@@ -91,6 +89,6 @@ object JcefNativesPacker {
 
     private const val BUFFER_SIZE = 1 shl 16
 
-    /** LZMA2 预设：6 在体积与耗时之间比较平衡（比 gzip 小约 25%） */
-    private const val PRESET = 6
+    /** gzip 压缩级别：9 = 最高压缩率（打包期一次性执行，多花的时间无所谓） */
+    private const val COMPRESSION_LEVEL = 9
 }

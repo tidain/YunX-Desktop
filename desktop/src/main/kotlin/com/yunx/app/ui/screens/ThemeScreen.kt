@@ -1,5 +1,8 @@
 package com.yunx.app.ui.screens
 
+import com.yunx.app.data.prefs.SettingsRepository
+import com.yunx.app.util.Log
+import com.yunx.app.util.PositionPicker
 import com.yunx.app.ui.BackHandler
 import com.yunx.app.ui.theme.MotionPolicy
 import androidx.compose.animation.AnimatedVisibility
@@ -7,7 +10,9 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -19,6 +24,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -29,6 +36,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -61,14 +69,17 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -83,17 +94,26 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import com.yunx.app.ui.theme.ComposeEmptyActivityTheme
 import com.yunx.app.ui.theme.ThemeController
 import com.yunx.app.ui.theme.readableSeedForeground
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlin.math.roundToInt
 
 /** 预置主题色（Material 风格种子色） */
 private val presetColors = listOf(
@@ -109,6 +129,8 @@ private val presetColors = listOf(
     "天蓝" to 0xFF0288D1L,
 )
 
+
+
 /**
  * 主题与外观设置页（参考 WebIDE ThemeSettingsItem 风格）：
  * - 外观模式：FilterChip 胶囊单选（跟随系统 / 浅色 / 深色）
@@ -122,6 +144,69 @@ fun ThemeScreen(
 ) {
     BackHandler { onBack() }
     var showColorPicker by remember { mutableStateOf(false) }
+    // 主窗口启动位置（改动即时写入偏好，下次启动生效）
+    var startupPosition by remember { mutableStateOf(SettingsRepository().windowStartupPosition) }
+    // 自定义位置（"x,y"，AWT 像素）；选了「自定义」后由「设置位置」拖拽写入
+    var customPosition by remember { mutableStateOf(SettingsRepository().windowCustomPosition) }
+    // 遮罩选位进行中（遮罩本体由独立的 C# 原生进程绘制，见 PositionPicker）
+    var picking by remember { mutableStateOf(false) }
+    val pickerScope = rememberCoroutineScope()
+    // 把主窗口重新显示出来（遮罩退出 / 本页被销毁时都要保证它回来了）
+    fun restoreMainWindow() {
+        runCatching {
+            com.yunx.app.ui.components.PreviewFullscreen.window?.let {
+                it.isVisible = true
+                it.toFront()
+            }
+        }
+    }
+    // 兜底：遮罩打开期间若本页被销毁（例如返回上一页），把主窗口恢复，避免窗口「消失」卡住
+    DisposableEffect(Unit) {
+        onDispose { restoreMainWindow() }
+    }
+    // 拉起遮罩：先把主窗口藏起来（遮罩背后才是真正的实时桌面），
+    // 用户拖完把结果写回偏好，再无条件恢复主窗口。
+    fun openPositionPicker(scale: Float) {
+        if (picking) return
+        val mainWindow = com.yunx.app.ui.components.PreviewFullscreen.window
+        val boxWidth = mainWindow?.width?.takeIf { it > 0 } ?: 1100
+        val boxHeight = mainWindow?.height?.takeIf { it > 0 } ?: 760
+        val initial = parseScreenPair(SettingsRepository().windowCustomPosition)
+            ?: mainWindow?.let { it.x to it.y }
+            ?: (0 to 0)
+        // seedColor 是 ARGB(A) 的 Long，取低 24 位当 RRGGBB 传给遮罩进程
+        val colorRgb = (ThemeController.seedColor and 0xFFFFFF).toInt()
+        picking = true
+        pickerScope.launch {
+            try {
+                mainWindow?.isVisible = false
+                // 等主窗口真正从屏幕上消失，免得它在遮罩出现前还闪一下
+                delay(120)
+                val result = withContext(Dispatchers.IO) {
+                    PositionPicker.pick(
+                        boxWidth = boxWidth,
+                        boxHeight = boxHeight,
+                        initialX = initial.first,
+                        initialY = initial.second,
+                        scale = scale,
+                        colorRgb = colorRgb,
+                        // 软件渲染 / 用户「减少动画」：遮罩内的翻转与 hover 动效一并去掉
+                        reduceMotion = MotionPolicy.reducedMotion
+                    )
+                }
+                if (result != null) {
+                    val saved = "${result.x},${result.y}"
+                    SettingsRepository().windowCustomPosition = saved
+                    SettingsRepository().windowStartupPosition = SettingsRepository.WINDOW_POS_CUSTOM
+                    startupPosition = SettingsRepository.WINDOW_POS_CUSTOM
+                    customPosition = saved
+                }
+            } finally {
+                restoreMainWindow()
+                picking = false
+            }
+        }
+    }
     // 主题色卡片默认展开
     var expanded by rememberSaveable { mutableStateOf(true) }
     val expandDuration = 200
@@ -136,6 +221,38 @@ fun ThemeScreen(
             targetValue = if (expanded) 1f else 0f,
             animationSpec = tween(250, easing = FastOutSlowInEasing)
         )
+    }
+
+    // ---------- 下拉框展开时自动滚动 ----------
+    // 点击下拉框后把页面下滑，使展开列表的底边刚好进入可视区（而不是滚到页面底部）。
+    val scrollState = rememberScrollState()
+    var viewportTopPx by remember { mutableFloatStateOf(0f) }
+    var viewportHeightPx by remember { mutableFloatStateOf(0f) }
+    // 待处理目标：下拉框展开后的底边在窗口中的 Y 坐标（-1 = 无请求）
+    var revealBottomPx by remember { mutableFloatStateOf(-1f) }
+    val revealMarginPx = with(density) { 12.dp.toPx() }
+    LaunchedEffect(revealBottomPx) {
+        val bottom = revealBottomPx
+        if (bottom > 0f && viewportHeightPx > 0f) {
+            // 等展开动画结束、scrollState.maxValue 稳定后再滚：
+            // 动画途中 maxValue 还没长到最终值，太早算会被夹到旧上界而几乎不动。
+            var last = scrollState.maxValue
+            var stable = 0
+            var frames = 0
+            while (stable < 3 && frames < 90) {
+                withFrameNanos { }
+                frames++
+                val cur = scrollState.maxValue
+                if (cur == last) stable++ else { stable = 0; last = cur }
+            }
+            // 目标按「内容坐标」算（与当前滚动位置无关）：
+            // 这样滚动过程中即使菜单位置变化，也不会反过来改目标、把滚动动画打断。
+            val bottomInContent = (bottom - viewportTopPx) + scrollState.value
+            val target = (bottomInContent + revealMarginPx - viewportHeightPx)
+                .coerceIn(0f, scrollState.maxValue.toFloat())
+            if (target > scrollState.value) scrollState.animateScrollTo(target.toInt())
+        }
+        if (revealBottomPx != -1f) revealBottomPx = -1f
     }
 
     // 桌面无动态取色：colorMode 0/1 等价（默认蓝色）
@@ -161,7 +278,12 @@ fun ThemeScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .verticalScroll(rememberScrollState())
+                // 记录滚动可视区（视口）位置与高度，供下拉框展开时计算滚动目标
+                .onGloballyPositioned { coords ->
+                    viewportTopPx = coords.positionInRoot().y
+                    viewportHeightPx = coords.size.height.toFloat()
+                }
+                .verticalScroll(scrollState)
                 .padding(horizontal = 16.dp, vertical = 16.dp)
         ) {
             // ---------- 外观模式 ----------
@@ -371,6 +493,67 @@ fun ThemeScreen(
                     )
                 }
             }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // ---------- 窗口 ----------
+            SectionLabel("窗口")
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainer
+                )
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("主窗口启动位置", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        text = "选择应用下次启动时主窗口出现的位置（重启后生效）",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    PositionDropdown(
+                        options = listOf(
+                            SettingsRepository.WINDOW_POS_CENTER to "中间",
+                            SettingsRepository.WINDOW_POS_TOP_LEFT to "左上角",
+                            SettingsRepository.WINDOW_POS_BOTTOM_LEFT to "左下角",
+                            SettingsRepository.WINDOW_POS_TOP_RIGHT to "右上角",
+                            SettingsRepository.WINDOW_POS_BOTTOM_RIGHT to "右下角",
+                            SettingsRepository.WINDOW_POS_LAST to "上次关闭位置",
+                            SettingsRepository.WINDOW_POS_CUSTOM to "自定义"
+                        ),
+                        selected = startupPosition,
+                        onSelect = {
+                            startupPosition = it
+                            SettingsRepository().windowStartupPosition = it
+                        },
+                        // 展开后把页面下滑到列表底边可见
+                        onExpandBottom = { revealBottomPx = it }
+                    )
+                    // 选了「自定义」才出现「设置位置」：打开全屏遮罩拖动站位框
+                    if (startupPosition == SettingsRepository.WINDOW_POS_CUSTOM) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = customPosition?.let { "已保存位置：$it" } ?: "尚未设置位置",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Button(
+                                onClick = { openPositionPicker(density.density) },
+                                enabled = !picking
+                            ) {
+                                Text("设置位置")
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -385,6 +568,7 @@ fun ThemeScreen(
             }
         )
     }
+
 }
 
 /** FilterChip 胶囊单选（参考 WebIDE SmoothFilterChip：选中 secondaryContainer，未选中描边） */
@@ -759,6 +943,179 @@ private fun VerticalHueSlider(
 }
 
 // ================= 辅助 =================
+
+/**
+ * 主窗口启动位置下拉框（应用内联展开，非 Popup —— 避免弹层被 JCEF 等重量级组件盖住）：
+ * 触发器：圆角容器 + 悬停/展开配色过渡 + 箭头 180° 旋转；展开项：高度/透明度过渡 + 逐项悬停高亮 + 选中态对勾。
+ */
+@Composable
+private fun PositionDropdown(
+    options: List<Pair<String, String>>,
+    selected: String,
+    onSelect: (String) -> Unit,
+    onExpandBottom: (Float) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var expanded by remember { mutableStateOf(false) }
+    // 展开列表的底边在窗口中的 Y 坐标（用于让页面自动滚动到列表底边可见）
+    var menuBottomPx by remember { mutableFloatStateOf(0f) }
+    // 只在「展开动画结束后」通知一次底边位置：
+    // 动画途中反复通知会让父级的滚动动画被反复取消（一卡一卡、甚至滚不动），
+    // 而且过早通知拿到的是动画中途的小高度，算出的溢出≈0。
+    LaunchedEffect(expanded) {
+        if (expanded) {
+            delay(300L)
+            if (menuBottomPx > 0f) onExpandBottom(menuBottomPx)
+        }
+    }
+    val arrowRotation by animateFloatAsState(
+        targetValue = if (expanded) 180f else 0f,
+        animationSpec = tween(220, easing = FastOutSlowInEasing),
+        label = "arrow"
+    )
+    val selectedLabel = options.firstOrNull { it.first == selected }?.second ?: options.first().second
+
+    Column(modifier = modifier.fillMaxWidth()) {
+        // 触发器
+        val triggerInteraction = remember { MutableInteractionSource() }
+        val triggerHovered by triggerInteraction.collectIsHoveredAsState()
+        val triggerBg by animateColorAsState(
+            targetValue = when {
+                expanded -> MaterialTheme.colorScheme.primaryContainer
+                triggerHovered -> MaterialTheme.colorScheme.surfaceContainerHighest
+                else -> MaterialTheme.colorScheme.surfaceContainerHigh
+            },
+            animationSpec = tween(180, easing = LinearEasing),
+            label = "triggerBg"
+        )
+        val triggerFg by animateColorAsState(
+            targetValue = if (expanded) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+            animationSpec = tween(180, easing = LinearEasing),
+            label = "triggerFg"
+        )
+        Surface(
+            onClick = { expanded = !expanded },
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            shape = RoundedCornerShape(12.dp),
+            color = triggerBg,
+            contentColor = triggerFg,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            interactionSource = triggerInteraction
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = selectedLabel,
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(
+                    imageVector = Icons.Filled.ExpandMore,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp).rotate(arrowRotation)
+                )
+            }
+        }
+
+        // 展开列表
+        AnimatedVisibility(
+            visible = expanded,
+            enter = fadeIn(tween(180)) + expandVertically(tween(220, easing = FastOutSlowInEasing), expandFrom = Alignment.Top),
+            exit = fadeOut(tween(140)) + shrinkVertically(tween(180, easing = FastOutSlowInEasing), shrinkTowards = Alignment.Top)
+        ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp)
+                    // 用 localToRoot 取底边：它不受父级裁剪影响（boundsInRoot 会被滚动容器裁剪到视口内，
+                    // 导致算出的“溢出”几乎为 0，页面就不会下滑），展开动画进行中也能拿到列表真实底边。
+                    .onGloballyPositioned { coords ->
+                        menuBottomPx = coords.localToRoot(Offset(0f, coords.size.height.toFloat())).y
+                    },
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+                Column(modifier = Modifier.padding(vertical = 6.dp)) {
+                    options.forEach { (value, label) ->
+                        PositionDropdownItem(
+                            label = label,
+                            selected = value == selected,
+                            onClick = {
+                                onSelect(value)
+                                expanded = false
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 下拉框单个选项：悬停高亮 + 选中态（加粗 + 对勾 + 次级容器色） */
+@Composable
+private fun PositionDropdownItem(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val bg by animateColorAsState(
+        targetValue = when {
+            selected -> MaterialTheme.colorScheme.secondaryContainer
+            hovered -> MaterialTheme.colorScheme.surfaceContainerHighest
+            else -> Color.Transparent
+        },
+        animationSpec = tween(150, easing = LinearEasing),
+        label = "itemBg"
+    )
+    val fg by animateColorAsState(
+        targetValue = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface,
+        animationSpec = tween(150, easing = LinearEasing),
+        label = "itemFg"
+    )
+    Surface(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp).height(44.dp),
+        shape = RoundedCornerShape(8.dp),
+        color = bg,
+        contentColor = fg,
+        interactionSource = interaction
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                modifier = Modifier.weight(1f)
+            )
+            if (selected) {
+                Icon(
+                    imageVector = Icons.Outlined.Check,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+    }
+}
+
+/** 解析 "x,y" 形式的屏幕坐标；非法返回 null */
+private fun parseScreenPair(value: String?): Pair<Int, Int>? {
+    val parts = value?.split(',') ?: return null
+    if (parts.size != 2) return null
+    val x = parts[0].trim().toIntOrNull() ?: return null
+    val y = parts[1].trim().toIntOrNull() ?: return null
+    return x to y
+}
 
 @Composable
 private fun SectionLabel(text: String) {

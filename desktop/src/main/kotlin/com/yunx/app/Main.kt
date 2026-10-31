@@ -5,9 +5,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
+import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.WindowState
 import androidx.compose.ui.window.application
 import kotlinx.coroutines.launch
@@ -146,7 +148,23 @@ fun main(args: Array<String>) {
         val splashMode = System.getenv("YUNXPC_SPLASH") == "1"
 
         // 窗口状态提升为可共享状态：视频预览的全屏开关（PreviewFullscreen）需要它
-        val windowState = remember { WindowState(size = DpSize(1100.dp, 760.dp)) }
+        // 启动位置：按「设置 → 主题与外观 → 窗口」的偏好决定；默认「上次关闭位置」——
+        // 该项用平台默认位置起步，随后在窗口内容里按上次记录的坐标还原（见 restoreLastWindowPosition）。
+        val startupPosition = remember { com.yunx.app.data.prefs.SettingsRepository().windowStartupPosition }
+        val windowState = remember {
+            WindowState(
+                size = DpSize(1100.dp, 760.dp),
+                position = when (startupPosition) {
+                    // 桌面为 LTR：Start=左、End=右
+                    com.yunx.app.data.prefs.SettingsRepository.WINDOW_POS_TOP_LEFT -> WindowPosition(Alignment.TopStart)
+                    com.yunx.app.data.prefs.SettingsRepository.WINDOW_POS_BOTTOM_LEFT -> WindowPosition(Alignment.BottomStart)
+                    com.yunx.app.data.prefs.SettingsRepository.WINDOW_POS_CENTER -> WindowPosition(Alignment.Center)
+                    com.yunx.app.data.prefs.SettingsRepository.WINDOW_POS_TOP_RIGHT -> WindowPosition(Alignment.TopEnd)
+                    com.yunx.app.data.prefs.SettingsRepository.WINDOW_POS_BOTTOM_RIGHT -> WindowPosition(Alignment.BottomEnd)
+                    else -> WindowPosition.PlatformDefault
+                }
+            )
+        }
 
         Window(
             onCloseRequest = {
@@ -163,6 +181,16 @@ fun main(args: Array<String>) {
                 com.yunx.app.ui.components.PreviewFullscreen.window = window
                 // 剪贴板分享链接弹窗：主窗口引用用于「主窗口失焦时才弹」判断 + 「打开」时切回前台
                 ClipboardLinkController.mainWindow = mainWindow
+            }
+            // 「上次关闭位置」/「自定义」还原：用 AWT 屏幕像素坐标，避开 WindowState 的 dp/density 换算。
+            // 只在启动时执行一次；记录的坐标不可见（如副屏被拔掉）时不动，交给平台默认位置。
+            androidx.compose.runtime.LaunchedEffect(Unit) {
+                when (startupPosition) {
+                    com.yunx.app.data.prefs.SettingsRepository.WINDOW_POS_LAST ->
+                        restoreWindowPosition(window as? java.awt.Frame, com.yunx.app.data.prefs.SettingsRepository().windowLastPosition)
+                    com.yunx.app.data.prefs.SettingsRepository.WINDOW_POS_CUSTOM ->
+                        restoreWindowPosition(window as? java.awt.Frame, com.yunx.app.data.prefs.SettingsRepository().windowCustomPosition)
+                }
             }
             // 窗口出现后再后台启动 JCEF，登录页通过 browserReady 状态自动切换
             androidx.compose.runtime.LaunchedEffect(Unit) {
@@ -196,6 +224,7 @@ fun main(args: Array<String>) {
                             when (cmd) {
                                 1 -> DesktopActions.bringWindowToFront(mainWindow)
                                 2 -> {
+                                    saveWindowPosition(mainWindow)
                                     val w = mainWindow
                                     if (w != null) WindowFx.fadeOutThen(w) { exitApplication() }
                                     else exitApplication()
@@ -210,11 +239,14 @@ fun main(args: Array<String>) {
                     closeRequested = closeRequested,
                     onCloseHandled = { closeRequested = false },
                     onExitApplication = {
+                        saveWindowPosition(mainWindow)
                         val w = mainWindow
                         if (w != null) WindowFx.fadeOutThen(w) { exitApplication() }
                         else exitApplication()
                     },
                     onMinimizeToTray = {
+                        // 记录当前窗口位置，再隐藏（下次启动「上次关闭位置」可还原）
+                        saveWindowPosition(mainWindow)
                         // 隐藏窗口前先抑制关闭请求，避免 Compose 把 hide 当作 close 重跑逻辑
                         suppressCloseRequest = true
                         mainWindow?.isVisible = false
@@ -247,6 +279,39 @@ private fun loadWindowIcon(): androidx.compose.ui.graphics.painter.Painter? = ru
         org.jetbrains.skia.Image.makeFromEncoded(bytes).toComposeImageBitmap()
     )
 }.getOrNull()
+
+/**
+ * 按偏好里记录的 AWT 屏幕像素坐标（"x,y"）把主窗口放回指定位置。
+ * 用 AWT 坐标而非 WindowState 的 dp，避开缩放（density）换算误差；
+ * 坐标落在任何屏幕之外（如副屏被拔掉）时不动，交给平台默认位置。
+ * 供「上次关闭位置」与「自定义」两种启动位置共用（[saved] 为 null 时直接返回）。
+ */
+private fun restoreWindowPosition(frame: java.awt.Frame?, saved: String?) {
+    if (saved.isNullOrBlank()) return
+    val f = frame ?: return
+    val parts = saved.split(',')
+    if (parts.size != 2) return
+    val x = parts[0].trim().toIntOrNull() ?: return
+    val y = parts[1].trim().toIntOrNull() ?: return
+    if (!isPointOnAnyScreen(x, y)) return
+    runCatching { f.setLocation(x, y) }
+}
+
+/** 记录主窗口当前屏幕坐标，供下次启动「上次关闭位置」还原；最大化时不记录（否则还原到最大化矩形）。 */
+private fun saveWindowPosition(frame: java.awt.Frame?) {
+    val f = frame ?: return
+    if (f.extendedState and java.awt.Frame.MAXIMIZED_BOTH != 0) return
+    runCatching {
+        com.yunx.app.data.prefs.SettingsRepository().windowLastPosition = "${f.x},${f.y}"
+    }
+}
+
+/** 点 (x, y) 是否落在任一屏幕范围内（含多显示器负坐标布局） */
+private fun isPointOnAnyScreen(x: Int, y: Int): Boolean = runCatching {
+    java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment()
+        .screenDevices
+        .any { it.defaultConfiguration.bounds.contains(x, y) }
+}.getOrDefault(true)
 
 /**
  * 内嵌浏览器诊断冒烟：主线程初始化 JCEF → 创建浏览器加载页面 → 等待 20s → 输出 Cookie 统计。

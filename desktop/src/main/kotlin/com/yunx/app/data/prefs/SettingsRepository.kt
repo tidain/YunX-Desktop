@@ -182,6 +182,33 @@ class SettingsRepository {
             prefs.put("close_behavior", value)
         }
 
+    /**
+     * 主窗口启动位置（设置 → 主题与外观 → 窗口）：默认「上次关闭位置」。
+     * 取值见 [WINDOW_POS_LAST] / [WINDOW_POS_TOP_LEFT] 等；非法值一律回退为「上次关闭位置」。
+     * **改动需重启生效**（启动时只读一次）。
+     */
+    var windowStartupPosition: String
+        get() = normalizeWindowPosition(prefs.get("window_startup_position", WINDOW_POS_LAST))
+        set(value) {
+            prefs.put("window_startup_position", normalizeWindowPosition(value))
+        }
+
+    /** 上次主窗口关闭时的屏幕坐标（"x,y"，AWT 像素）；null = 尚未记录（首次启动用平台默认位置） */
+    var windowLastPosition: String?
+        get() = prefs.get("window_last_position", null)?.takeIf { it.isNotBlank() }
+        set(value) {
+            if (value.isNullOrBlank()) prefs.remove("window_last_position")
+            else prefs.put("window_last_position", value)
+        }
+
+    /** 自定义主窗口启动位置（"x,y"，AWT 屏幕像素；由「设置位置」拖拽确定）；null = 尚未设置 */
+    var windowCustomPosition: String?
+        get() = prefs.get("window_custom_position", null)?.takeIf { it.isNotBlank() }
+        set(value) {
+            if (value.isNullOrBlank()) prefs.remove("window_custom_position")
+            else prefs.put("window_custom_position", value)
+        }
+
     /** 桌面图标样式（桌面版无 activity-alias，保留设置项占位） */
     var appIconVariant: Int
         get() = prefs.getInt("app_icon_variant", 0)
@@ -396,6 +423,44 @@ class SettingsRepository {
         }
 
     /**
+     * BT tracker 列表（每行一个，见「设置 → 下载引擎 → Gopeed 引擎」）：空 = 用内置默认列表。
+     * 只对 Gopeed 引擎的 BT 任务（磁力 / 种子文件）生效，由引擎的 `protocolConfig.bt.customTrackers` 承载。
+     */
+    var btTrackers: String
+        get() = prefs.get("bt_trackers", "")
+        set(value) {
+            val v = value.trim()
+            if (v.isEmpty()) prefs.remove("bt_trackers") else prefs.put("bt_trackers", v)
+        }
+
+    /**
+     * 是否启用 BT 的 DHT（默认开）：关掉后只能靠 tracker / PEX 找 peer，纯 tracker 场景更可控，
+     * 但公网磁力在 tracker 全挂时可能解析不出元数据。对应引擎的 `protocolConfig.bt.disableDht`（取反）。
+     */
+    var btDhtEnabled: Boolean
+        get() = prefs.getBoolean("bt_dht_enabled", true)
+        set(value) {
+            prefs.putBoolean("bt_dht_enabled", value)
+        }
+
+    /**
+     * 实际下发给引擎的 tracker 列表：用户在设置里填的优先，没填则用内置默认列表；
+     * 过滤掉不是 tracker 协议的脏行并去重（`udp://` / `http(s)://` / `ws(s)://`）。
+     */
+    fun resolvedBtTrackers(): List<String> {
+        val lines = btTrackers.split('\n').map { it.trim() }.filter { it.isNotEmpty() }
+        val source = if (lines.isNotEmpty()) lines else DEFAULT_BT_TRACKERS
+        return source.map { it.trim() }.filter { isTrackerUrl(it) }.distinct()
+    }
+
+    /** 是不是合法的 tracker URL（只做前缀判断，具体连通性交给引擎） */
+    private fun isTrackerUrl(value: String): Boolean {
+        val v = value.lowercase()
+        return v.startsWith("udp://") || v.startsWith("http://") ||
+            v.startsWith("https://") || v.startsWith("ws://") || v.startsWith("wss://")
+    }
+
+    /**
      * 多账号下载（**实验性**，代号 C1）：默认关。
      *
      * 开启后，同一个网盘登录了多个账号时，批量下载会把每个文件轮换交给不同账号去取直链，
@@ -489,6 +554,13 @@ class SettingsRepository {
         else -> PROXY_MODE_DIRECT
     }
 
+    /** 归一化主窗口启动位置：非法值一律回退为「上次关闭位置」 */
+    private fun normalizeWindowPosition(value: String): String = when (value) {
+        WINDOW_POS_TOP_LEFT, WINDOW_POS_BOTTOM_LEFT, WINDOW_POS_CENTER,
+        WINDOW_POS_TOP_RIGHT, WINDOW_POS_BOTTOM_RIGHT, WINDOW_POS_CUSTOM -> value
+        else -> WINDOW_POS_LAST
+    }
+
     companion object {
         /** 关闭行为：每次询问 */
         const val CLOSE_BEHAVIOR_ASK = "ask"
@@ -496,6 +568,21 @@ class SettingsRepository {
         const val CLOSE_BEHAVIOR_EXIT = "exit"
         /** 关闭行为：最小化到系统托盘 */
         const val CLOSE_BEHAVIOR_TRAY = "tray"
+
+        /** 主窗口启动位置：上次关闭的位置（默认） */
+        const val WINDOW_POS_LAST = "last"
+        /** 主窗口启动位置：屏幕左上角 */
+        const val WINDOW_POS_TOP_LEFT = "topLeft"
+        /** 主窗口启动位置：屏幕左下角 */
+        const val WINDOW_POS_BOTTOM_LEFT = "bottomLeft"
+        /** 主窗口启动位置：屏幕居中 */
+        const val WINDOW_POS_CENTER = "center"
+        /** 主窗口启动位置：屏幕右上角 */
+        const val WINDOW_POS_TOP_RIGHT = "topRight"
+        /** 主窗口启动位置：屏幕右下角 */
+        const val WINDOW_POS_BOTTOM_RIGHT = "bottomRight"
+        /** 主窗口启动位置：自定义（用「设置位置」拖拽记录下来的坐标，见 [windowCustomPosition]） */
+        const val WINDOW_POS_CUSTOM = "custom"
 
         /** 代理模式：不使用代理（直连） */
         const val PROXY_MODE_DIRECT = "direct"
@@ -508,6 +595,31 @@ class SettingsRepository {
         const val ENGINE_BUILTIN = "builtin"
         /** 下载引擎：外部 Gopeed 引擎（exe 子进程 + 本地 HTTP API） */
         const val ENGINE_GOPEED = "gopeed"
+
+        /**
+         * BT 内置默认 tracker 列表（用户没自定义时下发给引擎）。
+         * 取自长期在线的公共 tracker（trackerslist 系维护的常用集合），覆盖 udp/http/ws 三类协议，
+         * 尽量提高公网磁力/种子在无 DHT 情况下的元数据获取成功率。
+         */
+        val DEFAULT_BT_TRACKERS = listOf(
+            "udp://tracker.opentrackr.org:1337/announce",
+            "udp://open.tracker.cl:1337/announce",
+            "udp://open.demonii.com:1337/announce",
+            "udp://tracker.torrent.eu.org:451/announce",
+            "udp://exodus.desync.com:6969/announce",
+            "udp://tracker.openbittorrent.com:6969/announce",
+            "udp://opentracker.i2p.rocks:6969/announce",
+            "udp://explodie.org:6969/announce",
+            "udp://tracker1.bt.moack.co.kr:80/announce",
+            "udp://tracker.dler.org:6969/announce",
+            "udp://tracker.tiny-vps.com:6969/announce",
+            "https://tracker.tamersunion.org:443/announce",
+            "https://tracker.gbitt.info:443/announce",
+            "https://opentracker.i2p.rocks:443/announce",
+            "https://tracker.nanoha.org:443/announce",
+            "wss://tracker.openwebtorrent.com:443/announce",
+            "wss://tracker.btorrent.xyz:443/announce"
+        )
 
         /** 预览引擎：自动（有 ffplay 就用，否则回退内置 JavaFX）—— 默认 */
         const val PREVIEW_AUTO = "auto"

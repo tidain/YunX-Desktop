@@ -40,6 +40,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.ChevronLeft
 import androidx.compose.material.icons.outlined.ChevronRight
+import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Favorite
@@ -315,6 +316,10 @@ private fun WelcomePage() {
         Spacer(modifier = Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FactChip("分片下载")
+            FactChip("磁力 / BT / ed2k")
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FactChip("在线预览")
             FactChip("完全免费")
         }
@@ -476,6 +481,11 @@ private fun FeaturesPage() {
             icon = Icons.Outlined.Speed,
             title = "高速分片下载",
             description = "多线程并发 + 断点续传 + 慢连接自动换线；B 站高清分轨两轨并行，下载后自动合轨"
+        )
+        FeatureRow(
+            icon = Icons.Outlined.CloudDownload,
+            title = "P2P 下载",
+            description = "磁力 / BT 种子 / ed2k 电驴链接交给下载引擎，支持本地种子文件、Tracker 服务器管理与 DHT 开关"
         )
         FeatureRow(
             icon = Icons.Outlined.Storage,

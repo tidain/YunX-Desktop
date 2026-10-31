@@ -9,6 +9,8 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.ScrollbarStyle
+import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -16,6 +18,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -24,6 +27,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -64,6 +69,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -82,9 +88,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.yunx.app.data.db.DownloadTaskEntity
 import com.yunx.app.data.download.DownloadGrouping
+import com.yunx.app.data.download.DownloadPlatform
 import com.yunx.app.data.download.DownloadSaver
 import com.yunx.app.data.download.DownloadStats
-import com.yunx.app.data.download.MagnetLink
+import com.yunx.app.data.download.P2PLink
 import com.yunx.app.ui.SnackbarController
 import com.yunx.app.data.prefs.SettingsRepository
 import com.yunx.app.ui.components.FadeAlertDialog
@@ -92,6 +99,9 @@ import com.yunx.app.ui.components.rememberDownloadDirPicker
 import com.yunx.app.ui.theme.ThemeController
 import com.yunx.app.ui.viewmodel.DownloadViewModel
 import com.yunx.app.util.DesktopActions
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 下载页：任务列表（分片多线程下载 / 断点续传）、进度展示、暂停/继续/删除/打开。
@@ -105,6 +115,8 @@ fun DownloadScreen(
 ) {
     val tasks by viewModel.tasks.collectAsState()
     val stats by viewModel.stats.collectAsState()
+    // 任务列表滚动状态（右侧滚动条 / 定位用）
+    val listState = rememberLazyListState()
     val settingsRepo = remember { SettingsRepository() }
     var showAddDialog by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<DownloadTaskEntity?>(null) }
@@ -157,54 +169,83 @@ fun DownloadScreen(
                     onResumeAll = { viewModel.resumeAll() },
                     onDeleteAll = { showDeleteAllConfirm = true }
                 )
-                LazyColumn(
+                // 右侧常驻滚动条：任务多时可拖动定位、一眼看到当前位置，不必一直滚轮（滚轮照常可用）
+                Box(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()
-                        .nestedScroll(scrollBehavior.nestedScrollConnection),
-                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    // 根目录任务（无相对路径）单独显示
-                    val rootTasks = tasks.filter { !it.fileName.contains('/') }
-                    // 文件夹下载任务：按「保存根目录 + 顶级目录」分组。
-                    // 只看文件夹名会把“同一个文件夹下载到两个不同位置”的任务错误合并，
-                    // 展开后每个文件出现两条记录；Gopeed/内置下载器共用这套分组。
-                    val globalSaveRoot = DownloadSaver.resolveSaveDir(settingsRepo.downloadDirUri).absolutePath
-                    val folderGroups = tasks.filter { it.fileName.contains('/') }
-                        .groupBy { DownloadGrouping.groupKey(it, globalSaveRoot) }
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .nestedScroll(scrollBehavior.nestedScrollConnection),
+                        contentPadding = PaddingValues(start = 16.dp, end = 24.dp, top = 8.dp, bottom = 96.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        // 根目录任务（无相对路径）单独显示；下载失败的排到最上方（其余保持原有顺序）
+                        val rootTasks = tasks.filter { !it.fileName.contains('/') }
+                            .sortedBy { if (it.status == DownloadTaskEntity.STATUS_FAILED) 0 else 1 }
+                        // 文件夹下载任务：按「保存根目录 + 顶级目录」分组。
+                        // 只看文件夹名会把“同一个文件夹下载到两个不同位置”的任务错误合并，
+                        // 展开后每个文件出现两条记录；Gopeed/内置下载器共用这套分组。
+                        val globalSaveRoot = DownloadSaver.resolveSaveDir(settingsRepo.downloadDirUri).absolutePath
+                        // 含下载失败子任务的文件夹整体排到最上方（其余保持原有分组顺序）
+                        val folderGroups = tasks.filter { it.fileName.contains('/') }
+                            .groupBy { DownloadGrouping.groupKey(it, globalSaveRoot) }
+                            .entries
+                            .sortedBy { entry ->
+                                if (entry.value.any { it.status == DownloadTaskEntity.STATUS_FAILED }) 0 else 1
+                            }
 
-                    items(rootTasks, key = { it.id }) { task ->
-                        DownloadTaskCard(
-                            modifier = animateItemIfAllowed(),
-                            task = task,
-                            stats = stats[task.id],
-                            onPause = { viewModel.pause(task.id) },
-                            onResume = { viewModel.resume(task.id) },
-                            onRemove = { pendingDelete = task },
-                            onRedownload = { viewModel.redownload(task) },
-                            onDebug = openDebug?.let { cb -> { cb(task) } }
-                        )
-                    }
-
-                    folderGroups.forEach { (groupKey, groupTasks) ->
-                        val folder = groupKey.second
-                        val saveRoot = DownloadGrouping.folderSaveRoot(groupTasks.first(), globalSaveRoot)
-                        item(key = "folder_${groupKey.first}_$folder") {
-                            FolderDownloadGroup(
+                        items(rootTasks, key = { it.id }) { task ->
+                            DownloadTaskCard(
                                 modifier = animateItemIfAllowed(),
-                                folder = folder,
-                                saveRoot = saveRoot,
-                                tasks = groupTasks,
-                                stats = stats,
-                                onPause = { viewModel.pause(it) },
-                                onResume = { viewModel.resume(it) },
-                                onRemove = { pendingDelete = it },
-                                onRedownload = { viewModel.redownload(it) },
-                                onDebug = openDebug
+                                task = task,
+                                stats = stats[task.id],
+                                onPause = { viewModel.pause(task.id) },
+                                onResume = { viewModel.resume(task.id) },
+                                onRemove = { pendingDelete = task },
+                                onRedownload = { viewModel.redownload(task) },
+                                onDebug = openDebug?.let { cb -> { cb(task) } }
                             )
                         }
+
+                        folderGroups.forEach { (groupKey, groupTasks) ->
+                            val folder = groupKey.second
+                            val saveRoot = DownloadGrouping.folderSaveRoot(groupTasks.first(), globalSaveRoot)
+                            item(key = "folder_${groupKey.first}_$folder") {
+                                FolderDownloadGroup(
+                                    modifier = animateItemIfAllowed(),
+                                    folder = folder,
+                                    saveRoot = saveRoot,
+                                    tasks = groupTasks,
+                                    stats = stats,
+                                    onPause = { viewModel.pause(it) },
+                                    onResume = { viewModel.resume(it) },
+                                    onRemove = { pendingDelete = it },
+                                    onRedownload = { viewModel.redownload(it) },
+                                    onDebug = openDebug
+                                )
+                            }
+                        }
                     }
+                    VerticalScrollbar(
+                        adapter = rememberScrollbarAdapter(listState),
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .fillMaxHeight()
+                            .padding(end = 4.dp, top = 4.dp, bottom = 4.dp),
+                        // 默认样式在深色主题下几乎看不见（未悬停时颜色很深），这里改成跟随主题的浅色，亮/暗都清晰
+                        style = ScrollbarStyle(
+                            minimalHeight = 24.dp,
+                            thickness = 8.dp,
+                            shape = RoundedCornerShape(4.dp),
+                            hoverDurationMillis = 200,
+                            unhoverColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f),
+                            hoverColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
+                        )
+                    )
                 }
             }
         }
@@ -597,12 +638,15 @@ private fun FolderDownloadGroup(
                             trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
                         )
                     }
-                    // 子任务列表（紧凑行，含子文件夹内文件）
+                    // 子任务列表（紧凑行，含子文件夹内文件）；下载失败的子任务置顶（其余保持原有顺序）
+                    val orderedTasks = tasks.sortedBy {
+                        if (it.status == DownloadTaskEntity.STATUS_FAILED) 0 else 1
+                    }
                     Column(
                         modifier = Modifier.padding(10.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        tasks.forEach { task ->
+                        orderedTasks.forEach { task ->
                             DownloadSubTaskRow(
                                 task = task,
                                 stats = stats[task.id],
@@ -690,11 +734,15 @@ private fun DownloadSubTaskRow(
                         text = when {
                             verifying -> "校验中 · $mergePercent%"
                             merging -> "合并中 · $mergePercent%"
-                            isDownloading && stats != null && stats.speed > 0 ->
-                                "${DownloadTaskEntity.statusText(task.status)} · ${formatSpeed(stats.speed)}"
+                            isDownloading && stats != null && stats.speed > 0 -> {
+                                // 有速度时也要带上 P2P 的 peer 概览（BT 任务靠它判断「有没有在连上」）
+                                val peer = p2pPeerText(task, stats)
+                                val base = "${DownloadTaskEntity.statusText(task.status)} · ${formatSpeed(stats.speed)}"
+                                if (peer.isNotEmpty()) "$base · $peer" else base
+                            }
                             task.status == DownloadTaskEntity.STATUS_COMPLETED && task.avgSpeed > 0 ->
                                 "${DownloadTaskEntity.statusText(task.status)} · 平均 ${formatSpeed(task.avgSpeed)}"
-                            else -> taskStatusLine(task)
+                            else -> taskStatusLine(task, stats)
                         },
                         style = MaterialTheme.typography.labelSmall,
                         color = if (task.status == DownloadTaskEntity.STATUS_FAILED) {
@@ -860,7 +908,7 @@ private fun DownloadTaskCard(
                         text = when {
                             verifying -> "校验中 · $mergePercent%"
                             merging -> "合并中 · $mergePercent%"
-                            else -> taskStatusLine(task)
+                            else -> taskStatusLine(task, stats)
                         },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -998,23 +1046,46 @@ private fun openSavedFile(savePath: String) {
     }
 }
 
-private fun taskStatusLine(task: DownloadTaskEntity): String {
-    // 磁力任务在引擎拿到元数据之前 totalSize 一直是 0：这时按进度显示会变成「下载中」却没有任何数字，
+/**
+ * 任务状态行文案。
+ *
+ * BT（磁力 / 种子）/ ed2k 这类 P2P 任务额外拼上 peer 概览（种子 / 连接 / 总数）：
+ * 这些是它们「应当显示」的关键信息——HTTP 任务只看速度就够了，P2P 有没有 peer 才决定能不能下得动。
+ * peer 数字来自引擎 `stats.runtime`，取不到（-1）就不显示对应片段。
+ */
+private fun taskStatusLine(task: DownloadTaskEntity, stats: DownloadStats?): String {
+    val peerText = p2pPeerText(task, stats)
+    val peerSuffix = if (peerText.isNotEmpty()) " · $peerText" else ""
+    // 磁力/种子任务在引擎拿到元数据之前 totalSize 一直是 0：这时按进度显示会变成「下载中」却没有任何数字，
     // 看起来像卡死。BT 的元数据要等 DHT/tracker 找到 peer，慢起来是分钟级，明说在解析更诚实。
     if (task.status == DownloadTaskEntity.STATUS_DOWNLOADING &&
         task.totalSize <= 0 &&
-        MagnetLink.isMagnet(task.url)
+        P2PLink.matches(task.url)
     ) {
-        return "正在解析磁力（等待元数据，可能需要一两分钟）"
+        return "正在解析（等待元数据，可能需要一两分钟）$peerSuffix"
     }
     val status = DownloadTaskEntity.statusText(task.status)
-    return if (task.totalSize > 0) {
+    val base = if (task.totalSize > 0) {
         // 显示值钳制到 total（防恢复竞态残留导致显示超总大小）
         val shown = minOf(task.downloadedSize, task.totalSize)
         "$status · ${formatSize(shown)} / ${formatSize(task.totalSize)}"
     } else {
         status
     }
+    return "$base$peerSuffix"
+}
+
+/** P2P 任务的 peer 概览文案（种子 / 连接 / 已知 peer 总数）；非 P2P 或取不到数字时返回空串 */
+private fun p2pPeerText(task: DownloadTaskEntity, stats: DownloadStats?): String {
+    if (stats == null) return ""
+    val isP2P = task.platform == DownloadPlatform.MAGNET || task.platform == DownloadPlatform.ED2K
+    if (!isP2P) return ""
+    val parts = buildList {
+        if (stats.seeds >= 0) add("种子 ${stats.seeds}")
+        if (stats.peers >= 0) add("连接 ${stats.peers}")
+        if (stats.totalPeers >= 0) add("节点 ${stats.totalPeers}")
+    }
+    return parts.joinToString(" · ")
 }
 
 private fun progressText(task: DownloadTaskEntity): String {
@@ -1066,14 +1137,45 @@ private fun AddDownloadDialog(
 ) {
     var url by remember { mutableStateOf("") }
     var name by remember { mutableStateOf("") }
+    // 用户是否手动改过「名称」：没改过就随 url 实时重算显示名，改过就不再覆盖
+    var nameEdited by remember { mutableStateOf(false) }
     var saveDir by remember { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
     val pickSaveDir = rememberDownloadDirPicker()
     val defaultDir = remember {
         DownloadSaver.resolveSaveDir(
             com.yunx.app.data.prefs.SettingsRepository().downloadDirUri
         ).absolutePath
     }
-    val isMagnet = MagnetLink.isMagnet(url)
+    // 磁力 / ed2k / 本地 .torrent 种子文件：这三种 P2P 资源都不能靠 URL 猜出落盘名，
+    // 而且只有 Gopeed 引擎能下（DownloadManager 会自己兜底文件名并给出拦截原因）。
+    val isP2P = P2PLink.matches(url)
+    // 把 url 填好时顺手补一个显示名占位（磁力取 dn=、ed2k 取文件名、种子取文件名）。
+    // 只要用户还没手动改过「名称」就随输入实时重算：手动敲链接时中途会出现半截地址，
+    // 若只补一次就会把半截串锁成文件名（粘贴整条链接则一次到位）。
+    fun syncPlaceholderName(value: String) {
+        if (nameEdited) return
+        name = if (P2PLink.matches(value)) {
+            P2PLink.displayName(value)
+        } else {
+            value.substringAfterLast('/').take(80)
+        }
+    }
+    // 选择本地 .torrent 文件：直接把绝对路径当作 url（引擎按扩展名识别为种子并 os.Open 读取）
+    fun pickTorrentFile() {
+        scope.launch {
+            val path = withContext(Dispatchers.IO) {
+                DesktopActions.pickFile(
+                    filters = listOf(
+                        "BT 种子文件 (*.torrent)" to "*.torrent",
+                        "所有文件 (*.*)" to "*.*"
+                    )
+                )
+            } ?: return@launch
+            url = path
+            syncPlaceholderName(path)
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1097,32 +1199,33 @@ private fun AddDownloadDialog(
                     value = url,
                     onValueChange = {
                         url = it
-                        // 磁力链接的落盘名字由种子决定（引擎解析出元数据才知道），这里先拿 dn= 里的显示名占位
-                        if (name.isBlank()) {
-                            name = if (MagnetLink.isMagnet(it)) {
-                                MagnetLink.displayName(it)
-                            } else {
-                                it.substringAfterLast('/').take(80)
-                            }
-                        }
+                        syncPlaceholderName(it)
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("文件直链 URL 或磁力链接") },
-                    singleLine = true
+                    placeholder = { Text("文件直链 URL / 磁力 / ed2k 链接") },
+                    singleLine = true,
+                    trailingIcon = {
+                        IconButton(onClick = { pickTorrentFile() }) {
+                            Icon(Icons.Outlined.InsertDriveFile, contentDescription = "选择 .torrent 种子文件")
+                        }
+                    }
                 )
-                if (isMagnet) {
-                    // 磁力只有 Gopeed 内核能下（内置分片下载器是纯 HTTP 实现），提前说清楚省得白等
+                if (isP2P) {
+                    // 磁力 / ed2k / 种子文件只有 Gopeed 内核能下（内置分片下载器是纯 HTTP 实现），提前说清楚省得白等
                     Text(
-                        text = "磁力链接需要 Gopeed 引擎：内核未导入或未切换时会直接提示，不会被当成普通链接去下载",
+                        text = "磁力 / ed2k / BT 种子需要 Gopeed 引擎：内核未导入或未切换时会直接提示，不会被当成普通链接去下载",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 OutlinedTextField(
                     value = name,
-                    onValueChange = { name = it },
+                    onValueChange = {
+                        name = it
+                        nameEdited = true
+                    },
                     modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text(if (isMagnet) "显示名称（可留空，完成后会用种子名覆盖）" else "保存文件名") },
+                    placeholder = { Text(if (isP2P) "显示名称（可留空，完成后会用真实资源名覆盖）" else "保存文件名") },
                     singleLine = true
                 )
             }
@@ -1130,8 +1233,9 @@ private fun AddDownloadDialog(
         confirmButton = {
             Button(
                 onClick = { onConfirm(url.trim(), name.trim(), saveDir) },
-                // 磁力允许留空文件名：真正的名字要等引擎拿到元数据（DownloadManager 会自己兜底）
-                enabled = url.isNotBlank() && (name.isNotBlank() || isMagnet)
+                // P2P（磁力 / ed2k / 种子文件）允许留空文件名：真正的名字要等引擎拿到元数据
+                // （DownloadManager 会自己兜底）
+                enabled = url.isNotBlank() && (name.isNotBlank() || isP2P)
             ) { Text("开始下载") }
         },
         dismissButton = {

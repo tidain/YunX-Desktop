@@ -20,6 +20,22 @@ $AppVersion = ((Get-Content (Join-Path $root "version.txt") | Select-Object -Fir
 if (-not $AppVersion) { throw "version.txt missing or empty (expect a version like 1.2.2)" }
 Write-Host "[OK] App version: $AppVersion" -ForegroundColor Green
 
+# ---- 遮罩选位器 EXE：必须先在 Gradle 打包前编出来 ----
+# desktop\build.gradle.kts 的 processResources 会把它作为资源塞进 desktop.jar（yunx\ 前缀），
+# 运行期由 util/PositionPicker.kt 释放到 %TEMP% 再执行 —— 便携包目录里不再出现这个 exe。
+$pickerSrc = Join-Path $root "picker\PositionPicker.cs"
+$pickerExeOut = Join-Path $root "build\YunX-PositionPicker.exe"
+if (-not (Test-Path $pickerSrc)) { throw "picker source not found: $pickerSrc" }
+$csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+if (-not (Test-Path $csc)) { throw "csc.exe not found at $csc" }
+& $csc /nologo /target:winexe /platform:x64 /optimize+ `
+  "/r:System.Windows.Forms.dll" `
+  "/r:System.Drawing.dll" `
+  "/out:$pickerExeOut" `
+  "$pickerSrc"
+if ($LASTEXITCODE -ne 0) { throw "picker compile failed with exit $LASTEXITCODE" }
+Write-Host "[OK] Position picker built: $pickerExeOut" -ForegroundColor Green
+
 Write-Host ""
 Write-Host "[1/5] Gradle: build jar + native darkmode.dll + export runtime libs..." -ForegroundColor Cyan
 $buildOut = Invoke-Gradle ":desktop:jar" ":desktop:compileDarkMode" ":desktop:exportRuntimeLibs" ":desktop:exportJcefNatives" "--no-build-cache" "--console=plain" 2>&1 | Out-String
@@ -152,23 +168,23 @@ if ($skikoRuntimeJar) {
     throw "skiko-awt-runtime-windows-x64 jar not found in $libs"
 }
 
-# ---- [2c/5] CEF 原生库：jar 内嵌 tar.gz → tar.xz（体积从 120MB 降到约 90MB）----
-# CEF 原生库是包里最大的一块（解包后 261MB，官方 jar 内 gzip 后 120MB）。
-# 这里用 JcefNativesPacker 把它重压成 LZMA2（同一批文件，内容一个不少），
-# 顺带把语言包裁到只剩 zh-CN（应用固定 settings.locale = "zh-CN"）。
+# ---- [2c/5] CEF 原生库：jar 内嵌 tar.gz → 发布用 tar.gz（裁剪语言包）----
+# CEF 原生库是包里最大的一块（解包后 261MB，官方 jar 内 gzip 后约 120MB）。
+# 这里用 JcefNativesPacker 把它重新打成 tar.gz（沿用 gzip，不做 xz/LZMA2 —— 实测 xz
+# 对内嵌浏览器不友好），把语言包裁到只剩 zh-CN（应用固定 settings.locale = "zh-CN"）。
 # 运行期由 JcefNativesInstaller 首次使用时解开，再让 jcefmaven 跳过它自己的安装步骤。
 Write-Host ""
-Write-Host "[2c/5] Repacking CEF natives (tar.gz -> tar.xz)..." -ForegroundColor Cyan
+Write-Host "[2c/5] Repacking CEF natives (trim locales, tar.gz)..." -ForegroundColor Cyan
 $jcefNativesJar = Get-ChildItem (Join-Path $root "desktop\build\jcefNatives") -Filter "jcef-natives-*.jar" -ErrorAction SilentlyContinue |
     Select-Object -First 1 -ExpandProperty FullName
 if (-not $jcefNativesJar) { throw "jcef natives jar not found in desktop\build\jcefNatives" }
 $jcefNativesMb = Get-JarSizeMb $jcefNativesJar
-$jcefArchive = Join-Path $libs "jcef-natives.tar.xz"
+$jcefArchive = Join-Path $libs "jcef-natives.tar.gz"
 $javaExe = Join-Path $JDK "bin\java.exe"
 $packOut = & $javaExe -Xmx1g -cp "$libs\*" com.yunx.app.tools.JcefNativesPacker $jcefNativesJar $jcefArchive 2>&1 | Out-String
 Write-Host $packOut.Trim()
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path $jcefArchive)) { throw "jcef natives repack failed" }
-Write-Host "  jcef natives: $jcefNativesMb MB (jar) -> $([math]::Round((Get-Item $jcefArchive).Length / 1MB, 2)) MB (tar.xz, zh-CN only)" -ForegroundColor Green
+Write-Host "  jcef natives: $jcefNativesMb MB (jar) -> $([math]::Round((Get-Item $jcefArchive).Length / 1MB, 2)) MB (tar.gz, zh-CN only)" -ForegroundColor Green
 
 Write-Host ""
 Write-Host "[3/5] Building JRE runtime image (jlink)..." -ForegroundColor Cyan
@@ -313,6 +329,12 @@ if ($debugResidue.Count -gt 0) {
     }
 } else {
     Write-Host "  no *.pdb/*.map/*.dSYM residue found" -ForegroundColor Green
+}
+# 旧版本曾把遮罩 EXE 放在包根目录；现已改为打进 desktop.jar（运行期释放到 %TEMP%），升级时清掉残留
+$legacyPicker = Join-Path $outDir "YunX-PositionPicker.exe"
+if (Test-Path $legacyPicker) {
+    Write-Host "  removing legacy picker exe: $legacyPicker" -ForegroundColor Yellow
+    Remove-Item $legacyPicker -Force
 }
 $appSize = [math]::Round(((Get-ChildItem $appDir -File | Measure-Object -Sum Length).Sum) / 1MB, 1)
 $runtimeSize = [math]::Round(((Get-ChildItem (Join-Path $outDir "runtime") -Recurse -File | Measure-Object -Sum Length).Sum) / 1MB, 1)

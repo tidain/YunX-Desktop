@@ -30,7 +30,32 @@ const QN_LABEL = {
 /** 读不到页面清晰度列表时的兜底档位（高→低） */
 const FALLBACK_QUALITIES = [120, 116, 112, 80, 64, 32, 16];
 
-const BILI_RE = /^https?:\/\/([a-z0-9-]+\.)*bilibili\.com\/video\//i;
+/**
+ * 已适配的「视频平台专属卡片」识别表（顺序即优先级）。
+ *
+ * - [quality] = true 的平台（目前只有 B 站）会展示「清晰度 + 下载方式」两个下拉，
+ *   并在页面里读取当前播放清晰度；其余平台只给一个「交给云析下载」按钮 ——
+ *   它们的清晰度档位插件端读不到，交给云析解析时按平台最高可用档处理。
+ * - [re] 只做「是不是这个平台的视频页」的粗判，真正的链接识别与短链展开在云析侧完成。
+ */
+const VIDEO_PLATFORMS = [
+  {
+    key: 'bilibili', label: 'bilibili', color: '#fb7299', quality: true,
+    re: /^https?:\/\/([a-z0-9-]+\.)*bilibili\.com\/video\//i,
+  },
+  {
+    key: 'douyin', label: '抖音', color: '#fe2c55', quality: false,
+    re: /^https?:\/\/([a-z0-9-]+\.)*(douyin\.com|iesdouyin\.com)\//i,
+  },
+  {
+    key: 'weibo', label: '微博', color: '#e6162d', quality: false,
+    re: /^https?:\/\/([a-z0-9-]+\.)*(weibo\.com|weibo\.cn)\//i,
+  },
+  {
+    key: 'acfun', label: 'AcFun', color: '#fd4c5d', quality: false,
+    re: /^https?:\/\/([a-z0-9-]+\.)*acfun\.cn\//i,
+  },
+];
 
 function send(msg) {
   return new Promise((resolve) => {
@@ -89,12 +114,28 @@ function applyTheme(mode) {
   for (const b of btns) b.classList.toggle('active', b.dataset.themeValue === m);
 }
 
+/**
+ * 带过渡地应用外观。
+ *
+ * 配色切换本身是瞬时的（CSS 变量不参与动画），CSS 里那条全局 transition 只能平滑
+ * 「颜色属性」的变化；这里再用 View Transitions 把整页做成一次交叉淡变，观感更完整。
+ * 浏览器不支持 startViewTransition 时直接切（CSS 过渡仍生效），失败也兜底直切。
+ */
+function commitTheme(mode) {
+  const apply = () => applyTheme(mode);
+  if (typeof document.startViewTransition === 'function') {
+    try { document.startViewTransition(apply); return; } catch (e) { /* 兜底直切 */ }
+  }
+  apply();
+}
+
 async function loadTheme() {
   let mode = 'auto';
   try {
     const o = await chrome.storage.local.get(THEME_KEY);
     if (o && typeof o[THEME_KEY] === 'string') mode = o[THEME_KEY];
   } catch (e) { /* 读取失败则用默认 */ }
+  // 打开弹窗时不做过渡动画，直接落到目标配色
   applyTheme(mode);
 }
 
@@ -103,7 +144,7 @@ function bindTheme() {
   for (const b of btns) {
     b.addEventListener('click', () => {
       const mode = b.dataset.themeValue;
-      applyTheme(mode);
+      commitTheme(mode);
       try { chrome.storage.local.set({ [THEME_KEY]: mode }); } catch (e) { /* ignore */ }
     });
   }
@@ -378,20 +419,33 @@ function readBiliInfo() {
   return out;
 }
 
-/** 当前标签页是 B 站视频页时展示专属卡片，并尽力读取清晰度信息 */
-async function loadBili(tab) {
-  const card = $('bili-card');
-  if (!tab || !tab.url || !BILI_RE.test(tab.url)) {
+/** 当前标签页命中已适配的视频平台时展示专属卡片（B 站额外读取清晰度档位） */
+async function loadVideoCard(tab) {
+  const card = $('video-card');
+  const url = (tab && tab.url) || '';
+  const pf = VIDEO_PLATFORMS.find((p) => p.re.test(url));
+  if (!pf) {
     card.hidden = true;
+    card.dataset.platform = '';
     return;
   }
   card.hidden = false;
-  $('bili-title').textContent = '正在读取视频信息…';
-  $('bili-bvid').textContent = '';
-  $('bili-quality').innerHTML = '';
-  $('bili-hint').textContent = '';
-  $('bili-download').disabled = false;
-  $('bili-download').textContent = '交给云析下载';
+  card.dataset.platform = pf.key;
+  $('vcard-badge').textContent = pf.label;
+  $('vcard-badge').style.background = pf.color;
+  $('vcard-id').textContent = '';
+  $('vcard-title').textContent = '正在读取视频信息…';
+  $('video-hint').textContent = '';
+  $('vcard-fields').hidden = !pf.quality;
+  $('video-download').disabled = false;
+  $('video-download').textContent = '交给云析下载';
+
+  // 只有 B 站能从页面里读到清晰度；其余平台直接用标签页标题，交给云析解析
+  if (!pf.quality) {
+    $('vcard-title').textContent = tab.title || (pf.label + '视频');
+    $('video-hint').textContent = '云析会解析当前页面，按该平台可用的最高清晰度下载。';
+    return;
+  }
 
   let info = null;
   try {
@@ -407,14 +461,14 @@ async function loadBili(tab) {
   if (!info) info = { bvid: '', title: tab.title || '', current: 0, qualities: [] };
 
   const bvid = info.bvid || bvidFromUrl(tab.url);
-  $('bili-bvid').textContent = bvid || '';
-  $('bili-title').textContent = info.title || tab.title || 'B 站视频';
+  $('vcard-id').textContent = bvid || '';
+  $('vcard-title').textContent = info.title || tab.title || 'B 站视频';
 
   let quals = Array.isArray(info.qualities) ? info.qualities.filter((q) => q && q.qn) : [];
   if (!quals.length) quals = FALLBACK_QUALITIES.map((qn) => ({ qn: qn, label: '' }));
   quals.sort((a, b) => b.qn - a.qn);
 
-  const sel = $('bili-quality');
+  const sel = $('video-quality');
   sel.innerHTML = '';
   const cur = info.current || 0;
   let hasCurrent = false;
@@ -430,30 +484,113 @@ async function loadBili(tab) {
   else sel.selectedIndex = 0;
 }
 
-function bindBili() {
-  $('bili-download').addEventListener('click', async () => {
-    const bvid = $('bili-bvid').textContent.trim();
-    if (!bvid) { $('bili-hint').textContent = '未识别到视频 BV 号，请刷新页面后重试。'; return; }
-    const btn = $('bili-download');
+function bindVideoCard() {
+  $('video-download').addEventListener('click', async () => {
+    const card = $('video-card');
+    const platform = card.dataset.platform || '';
+    const btn = $('video-download');
+    const tab = currentTab || (await activeTab());
     btn.disabled = true;
     btn.textContent = '提交中…';
-    const tab = currentTab || (await activeTab());
-    const resp = await send({
-      type: 'yunx-bili-download',
-      bvid: bvid,
-      qn: parseInt($('bili-quality').value, 10) || 0,
-      mode: $('bili-mode').value || 'merge',
-      title: $('bili-title').textContent,
-      pageUrl: tab ? tab.url : '',
-    });
+
+    let resp;
+    if (platform === 'bilibili') {
+      const bvid = $('vcard-id').textContent.trim();
+      if (!bvid) {
+        btn.disabled = false;
+        btn.textContent = '交给云析下载';
+        $('video-hint').textContent = '未识别到视频 BV 号，请刷新页面后重试。';
+        return;
+      }
+      resp = await send({
+        type: 'yunx-bili-download',
+        bvid: bvid,
+        qn: parseInt($('video-quality').value, 10) || 0,
+        mode: $('video-mode').value || 'merge',
+        title: $('vcard-title').textContent,
+        pageUrl: tab ? tab.url : '',
+      });
+    } else {
+      resp = await send({
+        type: 'yunx-video-download',
+        platform: platform,
+        url: tab ? tab.url : '',
+        title: $('vcard-title').textContent,
+        pageUrl: tab ? tab.url : '',
+      });
+    }
+
     btn.disabled = false;
     btn.textContent = '交给云析下载';
     if (resp && resp.ok) {
-      $('bili-hint').textContent = '已交给云析，将按所选清晰度与方式加入下载队列。';
+      $('video-hint').textContent =
+        platform === 'bilibili'
+          ? '已交给云析，将按所选清晰度与方式加入下载队列。'
+          : '已交给云析，正在解析并加入下载队列。';
     } else {
-      $('bili-hint').textContent = (resp && resp.error) || '提交失败：请确认云析正在运行。';
+      $('video-hint').textContent = (resp && resp.error) || '提交失败：请确认云析正在运行。';
     }
   });
+}
+
+// ---------------------------------------------------------------- 归还后冷却提示
+
+/** 倒计时定时器；弹窗关闭时清理 */
+let cdTimer = null;
+
+function fmtRemain(ms) {
+  const total = Math.max(0, Math.ceil(ms / 1000));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return m + ' 分 ' + (s < 10 ? '0' : '') + s + ' 秒';
+}
+
+function stopCdTimer() {
+  if (cdTimer) { clearInterval(cdTimer); cdTimer = null; }
+}
+
+/** 展示/隐藏冷却提示条；remainMs <= 0 时隐藏并停表 */
+function renderCooldown(remainMs) {
+  const banner = $('cd-banner');
+  if (remainMs > 0) {
+    banner.hidden = false;
+    $('cd-time').textContent = fmtRemain(remainMs);
+  } else {
+    stopCdTimer();
+    banner.hidden = true;
+  }
+}
+
+/** 查询当前标签页根域名是否处于「归还后」的冷却期，是则开启实时倒计时 */
+async function loadCooldown(tab) {
+  stopCdTimer();
+  const url = (tab && tab.url) || '';
+  if (!/^https?:/i.test(url)) { renderCooldown(0); return; }
+
+  const resp = await send({ type: 'yunx-cooldown-status', url: url });
+  const remain = resp && resp.ok ? (resp.remainMs || 0) : 0;
+  if (remain <= 0) { renderCooldown(0); return; }
+
+  const endAt = Date.now() + remain;
+  renderCooldown(remain);
+  cdTimer = setInterval(() => {
+    const left = endAt - Date.now();
+    if (left <= 0) { renderCooldown(0); return; }
+    $('cd-time').textContent = fmtRemain(left);
+  }, 1000);
+}
+
+function bindCooldown() {
+  $('cd-resume').addEventListener('click', async () => {
+    const btn = $('cd-resume');
+    btn.disabled = true;
+    const tab = currentTab || (await activeTab());
+    await send({ type: 'yunx-cooldown-clear', url: (tab && tab.url) || '' });
+    renderCooldown(0);
+    btn.disabled = false;
+    $('hint').textContent = '已恢复捕获，该网站的下载将重新交给云析。';
+  });
+  window.addEventListener('pagehide', stopCdTimer);
 }
 
 // ---------------------------------------------------------------- 数据加载
@@ -501,7 +638,8 @@ $('refresh').addEventListener('click', async () => {
   $('hint').textContent = '正在刷新…';
   await loadStatus();
   await loadResources();
-  await loadBili(currentTab);
+  await loadVideoCard(currentTab);
+  await loadCooldown(currentTab);
   $('hint').textContent = '资源列表仅在本机与云析之间传递，不上传任何数据。';
 });
 
@@ -510,9 +648,11 @@ $('refresh').addEventListener('click', async () => {
   loadTheme();
   bindSwitches();
   bindPreview();
-  bindBili();
+  bindVideoCard();
+  bindCooldown();
   await loadSettings();
   await loadStatus();
   await loadResources();
-  await loadBili(currentTab);
+  await loadVideoCard(currentTab);
+  await loadCooldown(currentTab);
 })();

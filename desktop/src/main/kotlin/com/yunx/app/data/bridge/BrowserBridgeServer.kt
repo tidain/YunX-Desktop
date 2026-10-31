@@ -95,6 +95,7 @@ object BrowserBridgeServer {
         server.createContext("/ping", ::handlePing)
         server.createContext("/hook", ::handleHook)
         server.createContext("/bili", ::handleBili)
+        server.createContext("/video", ::handleVideo)
     }
 
     // ---------------- 请求处理 ----------------
@@ -219,6 +220,58 @@ object BrowserBridgeServer {
             respond(ex, 200, JSONObject().put("ok", accepted).toString())
         } catch (e: Exception) {
             Log.w(TAG, "bili 处理异常: ${e.javaClass.simpleName}: ${e.message}")
+            runCatching { respond(ex, 500, """{"error":"internal"}""") }
+        } finally {
+            ex.close()
+        }
+    }
+
+    /**
+     * 扩展「其他视频平台」提交解析下载：`{platform, url, title, pageUrl}`（抖音 / 微博 / AcFun …）。
+     *
+     * 与 `/bili` 同属**静默入队**：插件读不到这些平台的清晰度档位，只把页面链接交过来，
+     * 由 UI 层（[BrowserBridge.dispatchVideo]）解析链接并按平台最高可用档入队，立即返回 `{"ok":true}`。
+     */
+    private fun handleVideo(ex: HttpExchange) {
+        try {
+            if (!applyCors(ex, json = true)) {
+                respond(ex, 403, """{"error":"forbidden origin"}""")
+                return
+            }
+            if (ex.requestMethod.equals("OPTIONS", ignoreCase = true)) {
+                respond(ex, 204, "")
+                return
+            }
+            if (!ex.requestMethod.equals("POST", ignoreCase = true)) {
+                respond(ex, 405, """{"error":"method not allowed"}""")
+                return
+            }
+            if (!tokenMatches(ex)) {
+                respond(ex, 401, """{"error":"bad token"}""")
+                return
+            }
+            val body = ex.requestBody.readBytes().toString(StandardCharsets.UTF_8)
+            val json = runCatching { JSONObject(body) }.getOrNull()
+            if (json == null) {
+                respond(ex, 400, """{"error":"bad json"}""")
+                return
+            }
+            val url = json.optString("url").trim()
+            if (url.isEmpty()) {
+                respond(ex, 400, """{"error":"missing url"}""")
+                return
+            }
+            val req = BrowserBridge.VideoRequest(
+                platform = json.optString("platform"),
+                url = url,
+                title = json.optString("title"),
+                pageUrl = json.optString("pageUrl")
+            )
+            Log.i(TAG, "收到视频下载请求: platform=${req.platform} url=$url")
+            val accepted = BrowserBridge.dispatchVideo(req)
+            respond(ex, 200, JSONObject().put("ok", accepted).toString())
+        } catch (e: Exception) {
+            Log.w(TAG, "video 处理异常: ${e.javaClass.simpleName}: ${e.message}")
             runCatching { respond(ex, 500, """{"error":"internal"}""") }
         } finally {
             ex.close()

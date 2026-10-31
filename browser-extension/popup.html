@@ -31,20 +31,28 @@
     </div>
   </header>
 
-  <section class="bili-card" id="bili-card" hidden>
-    <div class="bili-head">
-      <span class="bili-badge">bilibili</span>
-      <span class="bili-bvid" id="bili-bvid"></span>
+  <section class="cd-banner" id="cd-banner" hidden>
+    <div class="cd-text">
+      <div class="cd-title">已停止捕获此网站的下载</div>
+      <div class="cd-sub">还有 <b class="cd-time" id="cd-time">0 分 00 秒</b> 自动重新开始捕获</div>
     </div>
-    <div class="bili-title" id="bili-title">正在读取视频信息…</div>
-    <div class="bili-fields">
-      <label class="bili-field">
-        <span class="bili-label">清晰度</span>
-        <select class="bili-select" id="bili-quality"></select>
+    <button type="button" class="cd-btn" id="cd-resume">立即重新开始</button>
+  </section>
+
+  <section class="vcard-card" id="video-card" hidden>
+    <div class="vcard-head">
+      <span class="vcard-badge" id="vcard-badge"></span>
+      <span class="vcard-id" id="vcard-id"></span>
+    </div>
+    <div class="vcard-title" id="vcard-title">正在读取视频信息…</div>
+    <div class="vcard-fields" id="vcard-fields">
+      <label class="vcard-field">
+        <span class="vcard-label">清晰度</span>
+        <select class="vcard-select" id="video-quality"></select>
       </label>
-      <label class="bili-field">
-        <span class="bili-label">下载方式</span>
-        <select class="bili-select" id="bili-mode">
+      <label class="vcard-field">
+        <span class="vcard-label">下载方式</span>
+        <select class="vcard-select" id="video-mode">
           <option value="merge">普通下载（音视频合并）</option>
           <option value="video">仅视频</option>
           <option value="audio">仅音频</option>
@@ -52,15 +60,15 @@
         </select>
       </label>
     </div>
-    <button type="button" class="bili-btn" id="bili-download">交给云析下载</button>
-    <div class="bili-hint" id="bili-hint"></div>
+    <button type="button" class="vcard-btn" id="video-download">交给云析下载</button>
+    <div class="vcard-hint" id="video-hint"></div>
   </section>
 
   <section class="card">
     <label class="row">
       <div class="row-text">
         <div class="row-title">启用插件</div>
-        <div class="row-sub">关闭后不再嗅探与劫持</div>
+        <div class="row-sub">关闭后不再嗅探与接管</div>
       </div>
       <span class="switch">
         <input type="checkbox" id="sw-enabled" />
@@ -69,7 +77,7 @@
     </label>
     <label class="row">
       <div class="row-text">
-        <div class="row-title">劫持浏览器下载</div>
+        <div class="row-title">接管浏览器下载</div>
         <div class="row-sub">下载交给云析，由云析询问保存位置与线程数</div>
       </div>
       <span class="switch">

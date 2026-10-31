@@ -2407,16 +2407,52 @@ class DownloadManager(
             hlsFile.delete()
             throw IllegalStateException("未授予存储权限，无法保存到下载目录")
         }
+        // HLS 合并产物是 TS：有 ffmpeg 时转封装成 MP4（-c copy），没有则保留 TS
+        val (outFile, outName) = prepareHlsOutput(id, task, hlsFile)
         val savedPath = withContext(Dispatchers.IO) {
-            DownloadSaver.save(task.fileName, hlsFile, effectiveSaveDir(task))
+            DownloadSaver.save(outName, outFile, effectiveSaveDir(task))
         }
             ?: throw IllegalStateException("保存到下载目录失败")
-        val hlsTotal = dao.get(id)?.totalSize ?: 0L
-        completeWithAvg(id, savedPath, hlsTotal)
-        Log.d(TAG, "hlsDownload: id=$id 下载完成 savedPath=$savedPath size=${hlsFile.length()}")
+        // 回写真实大小：HLS 链路此前从不写 totalSize，DB 里恒为 0 → UI 显示 0B
+        val realSize = File(savedPath).length().takeIf { it > 0 } ?: hlsFile.length()
+        if (outFile !== hlsFile) runCatching { outFile.delete() }
+        if (realSize > 0) dao.updateProgress(id, DownloadTaskEntity.STATUS_DOWNLOADING, realSize, realSize)
+        if (outName != task.fileName) dao.updateFileName(id, outName)
+        completeWithAvg(id, savedPath, realSize)
+        Log.d(TAG, "hlsDownload: id=$id 下载完成 savedPath=$savedPath size=$realSize")
         taskCallbacks.remove(id)?.let { cb -> runCatching { cb() } }
         _stats.update { it - id }
         hlsFile.delete()
+    }
+
+    /**
+     * HLS 产物收口：合并出来的 TS 若本机有 ffmpeg 就转封装成 MP4（`-c copy`，不重编码），
+     * 返回（最终文件, 最终文件名）；缺引擎 / 转换失败时原样返回 TS，避免名实不符。
+     * 转封装成功会把文件名同步改成 `.mp4`（列表显示与实际产物一致）。
+     */
+    private suspend fun prepareHlsOutput(
+        id: Long,
+        task: DownloadTaskEntity,
+        merged: File
+    ): Pair<File, String> {
+        if (!task.fileName.endsWith(".ts", ignoreCase = true)) return merged to task.fileName
+        val mp4 = File(AppContext.mergeDir, "hls_$id.mp4")
+        val remuxed = withContext(Dispatchers.IO) {
+            if (FfplayManager.locateFfmpeg() == null) {
+                // 缺引擎：只提示不阻塞 —— 本次照常保留 TS 完成；用户同意后后台装引擎，之后的任务自动转 MP4
+                EngineInstallPrompt.ask(EngineInstallPrompt.Reason.MERGE)
+                false
+            } else {
+                runCatching { mp4.delete() }
+                FfmpegMuxer.remuxToMp4(merged, mp4)
+            }
+        }
+        if (!remuxed || !mp4.isFile || mp4.length() == 0L) {
+            Log.w(TAG, "HLS 未转封装 MP4，保留 TS 产物 id=$id")
+            runCatching { mp4.delete() }
+            return merged to task.fileName
+        }
+        return mp4 to (task.fileName.dropLast(3) + ".mp4")
     }
 
     // ---------- DASH 双轨合轨 / 动态照片合成 ----------
@@ -3068,13 +3104,28 @@ class DownloadManager(
             }
             if (!isTaskActive()) throw CancellationException("下载被取消")
             if (!ok) throw IllegalStateException("HLS 转码流下载失败")
+            // HLS 合并产物是 TS：有 ffmpeg 时转封装成 MP4（-c copy），没有则保留 TS
+            val (outFile, outName) = prepareHlsOutput(id, task, loc.partFile)
             val savedPath = withContext(Dispatchers.IO) {
-                DownloadSaver.commitDirectPart(loc.partFile, loc.destDir, loc.finalName)
+                if (outFile === loc.partFile) {
+                    DownloadSaver.commitDirectPart(outFile, loc.destDir, outName)
+                } else {
+                    DownloadSaver.save(outName, outFile, effectiveSaveDir(task))
+                }
             } ?: throw IllegalStateException("直写：无法创建最终文件（目标目录不可用或文件名冲突）")
+            val realSize = File(savedPath).length().takeIf { it > 0 } ?: loc.partFile.length()
+            if (outFile !== loc.partFile) {
+                // 转封装路径：TS 临时文件没走 commitDirectPart（改名即提交），需自行清理，
+                // 否则会在下载目录留下一个 .part 孤儿文件
+                runCatching { outFile.delete() }
+                DownloadSaver.deleteDirectPart(loc.partFile.absolutePath)
+            }
             dao.updateDirect(id, "", 0)
-            val hlsTotal = dao.get(id)?.totalSize ?: 0L
-            completeWithAvg(id, savedPath, hlsTotal)
-            Log.d(TAG, "hlsDownloadDirect: id=$id 直写完成 savedPath=$savedPath")
+            // 回写真实大小：HLS 链路此前从不写 totalSize，DB 里恒为 0 → UI 显示 0B
+            if (realSize > 0) dao.updateProgress(id, DownloadTaskEntity.STATUS_DOWNLOADING, realSize, realSize)
+            if (outName != task.fileName) dao.updateFileName(id, outName)
+            completeWithAvg(id, savedPath, realSize)
+            Log.d(TAG, "hlsDownloadDirect: id=$id 直写完成 savedPath=$savedPath size=$realSize")
             taskCallbacks.remove(id)?.let { cb -> runCatching { cb() } }
         } catch (e: CancellationException) {
             DownloadSaver.deleteDirectPart(directPath)

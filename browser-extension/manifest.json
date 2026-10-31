@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "云析下载助手",
+  "default_locale": "zh_CN",
+  "name": "__MSG_extName__",
   "version": "1.0.0",
-  "description": "嗅探网页资源并劫持浏览器下载，交给云析（YunX-Desktop）多线程下载；支持一键归还浏览器下载。",
+  "description": "__MSG_extDescription__",
   "minimum_chrome_version": "102",
   "permissions": [
     "downloads",

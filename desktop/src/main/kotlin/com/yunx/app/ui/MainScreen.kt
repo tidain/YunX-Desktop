@@ -1381,6 +1381,31 @@ fun MainScreen(
             onDispose { BrowserBridge.onBiliRequest = null }
         }
 
+        // 浏览器插件「其他视频平台页」（抖音 / 微博 / AcFun …）提交的解析下载：
+        // 插件读不到这些平台的清晰度档位，只把页面链接交过来，这里静默解析（含短链展开）后按合并下载入队。
+        DisposableEffect(Unit) {
+            BrowserBridge.onVideoRequest = { req ->
+                scope.launch {
+                    try {
+                        val result = videoResolveViewModel.parseForPluginUrl(req.url)
+                        val queued = enqueueVideoMedias(
+                            downloadManager, result, result.medias, VideoStreamMode.MERGE
+                        )
+                        if (queued > 0) {
+                            SnackbarController.show("已加入下载队列（$queued 项）")
+                            currentTab = MainTab.Download
+                        } else {
+                            SnackbarController.show("${req.platform.ifBlank { "视频" }} 未解析到可下载的资源")
+                        }
+                    } catch (e: Exception) {
+                        SnackbarController.show("视频解析失败：${e.message ?: "未知错误"}")
+                    }
+                }
+                true
+            }
+            onDispose { BrowserBridge.onVideoRequest = null }
+        }
+
         // 关闭确认弹窗（退出 / 最小化到托盘 / 取消）
         CloseConfirmDialog(
             visible = showCloseDialog,

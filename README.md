@@ -16,7 +16,7 @@
 [![Kotlin](https://img.shields.io/badge/Kotlin-7F52FF?style=flat-square\&logo=kotlin\&logoColor=white)](https://kotlinlang.org/)
 [![Compose](https://img.shields.io/badge/Compose%20Multiplatform-Desktop-4285F4?style=flat-square\&logo=jetpackcompose\&logoColor=white)](https://www.jetbrains.com/lp/compose-multiplatform/)
 
-[下载最新版](https://github.com/tidain/YunX-Desktop/releases/latest) · [功能](docs/FEATURES.md) · [使用](docs/USAGE.md) · [构建](docs/BUILD.md) · [常见问题](#常见问题) · [与安卓版差异](docs/UPSTREAM-DIFF.md)
+[下载最新版](https://github.com/tidain/YunX-Desktop/releases/latest) · [功能](docs/FEATURES.md) · [使用](docs/USAGE.md) · [浏览器插件](#浏览器插件) · [构建](docs/BUILD.md) · [常见问题](#常见问题) · [与安卓版差异](docs/UPSTREAM-DIFF.md)
 
 </div>
 
@@ -69,6 +69,18 @@
 
 > \[!WARNING]
 > **不建议使用百度网盘，可能导致账号被风控！**
+
+## 浏览器插件
+
+仓库 `browser-extension/` 内含 Chrome / Edge 扩展「**云析下载助手**」（Manifest V3）—— 让浏览器下载接管到云析的多线程下载。
+
+- **嗅探页面资源**：列出当前网页里可下载的媒体与文件，按图片 / 视频 / 音频 / 文档 / 压缩包 / 程序 / 字体分类，图片与视频支持卡片预览。
+- **接管浏览器下载**：浏览器开始下载时自动接管（取消浏览器下载并抹掉记录），由云析弹窗询问保存目录与线程数（最高 512，超过 32 需二次确认）。
+- **归还浏览器下载**：点「归还浏览器下载」后重新发起浏览器原生下载，并对该页面网站（根域名及其子域名）写入 **5 分钟冷却**；冷却期内打开插件可看到「还有 X 分 YY 秒」倒计时，并可点「立即重新开始」单独解除当前网站的冷却。
+- **视频平台卡片**：B 站视频页可选清晰度与下载方式；抖音 / 微博 / AcFun 视频页可一键交给云析解析下载。
+- **安全**：扩展与云析通过本机回环 HTTP（`127.0.0.1`，随机 token）通信，网页脚本无法伪造请求；**云析没运行时探测不到端口，扩展完全不干预浏览器下载**。
+
+安装、开关与工作原理见 [浏览器插件说明](browser-extension/README.md)。
 
 ## 功能
 

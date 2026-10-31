@@ -98,6 +98,13 @@ class VideoResolveViewModel internal constructor(
         return repository.parse(link, qualityQn)
     }
 
+    /** 供浏览器插件调用：按视频页面链接（抖音 / 微博 / AcFun …）静默解析，清晰度取平台默认 */
+    suspend fun parseForPluginUrl(url: String): VideoParseResult {
+        val link = VideoLinkParser.parse(url)
+            ?: throw VideoParseException(VideoParseErrorKind.NOT_FOUND, "未识别到视频链接：$url")
+        return repository.parse(link, null)
+    }
+
     fun toggleSelect(index: Int) {
         selected = if (index in selected) selected - index else selected + index
     }

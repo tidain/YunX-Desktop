@@ -62,6 +62,20 @@
    否则这些元素会一直显示 —— 预览覆盖层会直接铺满整个 popup。 */
 [hidden] { display: none !important; }
 
+/* ---------- 外观切换过渡 ----------
+   切换亮/暗时颜色是「瞬间」换的（CSS 变量不参与动画），这里统一给背景/文字/边框加过渡，
+   让配色变化平滑过去。用 :where() 把权重压到 0：任何元素自己声明的 transition 都能覆盖它，
+   下面 .seg-btn / .item / .switch .track 等已有的过渡不受影响。
+   同时覆盖「自动」模式 —— 浏览器切换亮暗时只有媒体查询生效、不经 JS，靠这条过渡。 */
+:where(body, body *) {
+  transition: background-color 240ms ease, color 240ms ease,
+              border-color 240ms ease, box-shadow 240ms ease;
+}
+
+/* 点击切换按钮时用 View Transition 做整页交叉淡变（见 popup.js），淡变时长与上面保持一致 */
+::view-transition-old(root),
+::view-transition-new(root) { animation-duration: 240ms; }
+
 html, body { margin: 0; padding: 0; }
 
 body {
@@ -176,6 +190,53 @@ body {
 .icon-btn:hover { background: var(--hover); }
 .icon-btn:active svg { transform: rotate(45deg); }
 .icon-btn svg { transition: transform 0.2s; }
+
+/* ---------- 归还后冷却提示条 ---------- */
+
+.cd-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 12px 0;
+  padding: 9px 11px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--warn) 12%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--warn) 34%, var(--line));
+}
+
+.cd-text { flex: 1 1 auto; min-width: 0; }
+
+.cd-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--fg);
+  line-height: 1.3;
+}
+
+.cd-sub {
+  font-size: 11px;
+  color: var(--sub);
+  margin-top: 3px;
+}
+
+.cd-sub .cd-time { color: var(--warn); font-weight: 600; }
+
+.cd-btn {
+  flex: 0 0 auto;
+  border: none;
+  border-radius: 8px;
+  padding: 6px 11px;
+  font-size: 11.5px;
+  font-weight: 600;
+  font-family: inherit;
+  color: var(--brand-fg);
+  background: var(--brand);
+  cursor: pointer;
+  transition: background 0.14s;
+}
+
+.cd-btn:hover { background: var(--brand-dark); }
+.cd-btn:disabled { opacity: 0.6; cursor: default; }
 
 /* ---------- 设置卡片 ---------- */
 
@@ -373,9 +434,9 @@ body {
   line-height: 1.5;
 }
 
-/* ---------- bilibili 专属卡片 ---------- */
+/* ---------- 视频平台专属卡片（bilibili / 抖音 / 微博 / AcFun 共用） ---------- */
 
-.bili-card {
+.vcard-card {
   margin: 10px 12px 0;
   padding: 10px 12px 11px;
   border-radius: 12px;
@@ -383,13 +444,14 @@ body {
   border: 1px solid var(--line);
 }
 
-.bili-head {
+.vcard-head {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.bili-badge {
+/* 徽章底色由 JS 按平台写入（bilibili 粉 / 抖音红 / 微博红 / AcFun 红），默认走品牌色 */
+.vcard-badge {
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.02em;
@@ -399,9 +461,9 @@ body {
   padding: 1px 6px;
 }
 
-.bili-bvid { font-size: 11px; color: var(--sub); }
+.vcard-id { font-size: 11px; color: var(--sub); }
 
-.bili-title {
+.vcard-title {
   font-size: 12.5px;
   font-weight: 600;
   line-height: 1.4;
@@ -412,22 +474,22 @@ body {
   overflow: hidden;
 }
 
-.bili-fields {
+.vcard-fields {
   display: flex;
   gap: 8px;
   margin-top: 8px;
 }
 
-.bili-field { flex: 1 1 0; min-width: 0; display: block; }
+.vcard-field { flex: 1 1 0; min-width: 0; display: block; }
 
-.bili-label {
+.vcard-label {
   display: block;
   font-size: 11px;
   color: var(--sub);
   margin-bottom: 3px;
 }
 
-.bili-select {
+.vcard-select {
   width: 100%;
   font-family: inherit;
   font-size: 12px;
@@ -439,7 +501,7 @@ body {
   cursor: pointer;
 }
 
-.bili-btn {
+.vcard-btn {
   width: 100%;
   margin-top: 10px;
   border: none;
@@ -454,15 +516,15 @@ body {
   transition: background 0.14s, opacity 0.14s;
 }
 
-.bili-btn:hover { background: var(--brand-dark); }
+.vcard-btn:hover { background: var(--brand-dark); }
 
-.bili-btn[disabled] {
+.vcard-btn[disabled] {
   background: var(--switch-off);
   color: var(--bg);
   cursor: default;
 }
 
-.bili-hint {
+.vcard-hint {
   font-size: 11px;
   color: var(--sub);
   line-height: 1.4;
@@ -470,7 +532,7 @@ body {
   min-height: 0;
 }
 
-.bili-hint:empty { display: none; }
+.vcard-hint:empty { display: none; }
 
 /* ---------- 分类筛选 ---------- */
 

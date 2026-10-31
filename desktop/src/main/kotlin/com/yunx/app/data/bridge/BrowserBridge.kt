@@ -84,6 +84,31 @@ object BrowserBridge {
     /** 交给 UI 层处理一条 B 站请求；未注册消费者时按未受理返回 */
     fun dispatchBili(req: BiliRequest): Boolean = onBiliRequest?.invoke(req) ?: false
 
+    /**
+     * 扩展「其他视频平台」提交的一次解析下载请求（抖音 / 微博 / AcFun …）。
+     *
+     * 与 [BiliRequest] 同属「主动静默提交」：插件读不到这些平台的清晰度档位，
+     * 只有把页面链接交给云析，由云析侧的 [com.yunx.app.data.parser.VideoLinkParser] 识别并展开短链，
+     * 再按平台可用的最高清晰度解析入队。
+     */
+    data class VideoRequest(
+        /** 平台标识：douyin / weibo / acfun …（日志与提示用） */
+        val platform: String,
+        /** 视频页面链接（含短链，云析侧会展开） */
+        val url: String,
+        /** 视频标题（日志用） */
+        val title: String,
+        /** 发起页面地址（日志用） */
+        val pageUrl: String
+    )
+
+    /** 其他平台请求的消费者（由 UI 层注册）；返回是否已受理 */
+    @Volatile
+    var onVideoRequest: ((VideoRequest) -> Boolean)? = null
+
+    /** 交给 UI 层处理一条其他平台请求；未注册消费者时按未受理返回 */
+    fun dispatchVideo(req: VideoRequest): Boolean = onVideoRequest?.invoke(req) ?: false
+
     private val seq = AtomicLong(0)
 
     private val _pending = MutableStateFlow<List<HookRequest>>(emptyList())

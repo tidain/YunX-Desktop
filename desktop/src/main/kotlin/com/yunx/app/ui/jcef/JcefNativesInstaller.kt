@@ -31,6 +31,14 @@ object JcefNativesInstaller {
     /** 就绪标记：内容为解包时的「压缩包大小-修改时间」，压缩包变了就重解 */
     private const val READY_MARKER = ".yunx-natives-ready"
 
+    /**
+     * 文件清单：解包时记下每个文件的相对路径与字节数（`路径<TAB>大小`，每行一条）。
+     * 启动时逐条比对，用于发现「上次解包被中断 / 目录被写坏」——这类残留会让 libcef.dll 等
+     * 原生库不完整，进而触发 CEF 的 fail-fast（issue #34）。只记大小不记校验和：260MB 全量读取
+     * 校验太慢，而中断 / 截断是主要损坏方式，大小足以发现。
+     */
+    private const val MANIFEST = ".yunx-natives-manifest"
+
     private const val BUFFER_SIZE = 1 shl 16
 
     /**
@@ -43,9 +51,7 @@ object JcefNativesInstaller {
         val stamp = "${archive.length()}-${archive.lastModified()}"
         if (isReady(installDir, stamp)) return true
         return try {
-            extract(archive, installDir)
-            File(installDir, "install.lock").createNewFile()
-            File(installDir, READY_MARKER).writeText(stamp)
+            extract(archive, installDir, stamp)
             Log.i(TAG, "CEF natives extracted: ${installDir.absolutePath}")
             true
         } catch (t: Throwable) {
@@ -58,7 +64,27 @@ object JcefNativesInstaller {
         if (!File(installDir, "install.lock").isFile) return false
         if (!File(installDir, "build_meta.json").isFile) return false
         val marker = File(installDir, READY_MARKER)
-        return marker.isFile && marker.readText().trim() == stamp
+        if (!marker.isFile || marker.readText().trim() != stamp) return false
+        return manifestMatches(installDir)
+    }
+
+    /** 逐条比对清单：文件缺失或大小不符即判定目录已损坏，需要重解 */
+    private fun manifestMatches(installDir: File): Boolean {
+        val lines = runCatching { File(installDir, MANIFEST).readLines() }.getOrNull() ?: return false
+        if (lines.isEmpty()) return false
+        for (line in lines) {
+            if (line.isBlank()) continue
+            val tab = line.indexOf('\t')
+            if (tab <= 0) return false
+            val rel = line.substring(0, tab)
+            val size = line.substring(tab + 1).toLongOrNull() ?: return false
+            val f = File(installDir, rel)
+            if (!f.isFile || f.length() != size) {
+                Log.w(TAG, "CEF natives 清单不符，将重新解包: $rel")
+                return false
+            }
+        }
+        return true
     }
 
     /**
@@ -80,15 +106,22 @@ object JcefNativesInstaller {
         return candidates.firstOrNull { it.isFile }
     }
 
-    /** 解包（tar + xz）；条目名以 `./` 开头，落盘前统一规范化并拒绝越界路径 */
-    private fun extract(archive: File, installDir: File) {
-        if (installDir.exists() && !installDir.deleteRecursively()) {
-            error("无法清理旧的 CEF 目录: ${installDir.absolutePath}")
-        }
-        if (!installDir.mkdirs() && !installDir.isDirectory) {
-            error("无法创建 CEF 目录: ${installDir.absolutePath}")
-        }
-        val root = installDir.canonicalFile
+    /**
+     * 解包（tar + xz）。条目名以 `./` 开头，落盘前统一规范化并拒绝越界路径。
+     *
+     * ★ 原子化：先解到同级的临时目录 `<installDir>.extracting`，把 install.lock / 就绪标记 / 清单
+     *   都写好后，再把临时目录整体重命名到 [installDir]。这样即使中途被中断（覆盖安装双开、进程被杀），
+     *   正式目录里也不会留下「看起来就绪、其实残缺」的原生库；下一次启动按清单校验即可发现并重解
+     *   （issue #34：双开时序下 jcef-bundle 被写坏且永不自愈）。
+     */
+    private fun extract(archive: File, installDir: File, stamp: String) {
+        val parent = installDir.parentFile ?: error("无法定位 CEF 上级目录: ${installDir.absolutePath}")
+        if (!parent.isDirectory && !parent.mkdirs()) error("无法创建 CEF 上级目录: ${parent.absolutePath}")
+        val temp = File(parent, installDir.name + ".extracting")
+        if (temp.exists() && !temp.deleteRecursively()) error("无法清理临时解包目录: ${temp.absolutePath}")
+        if (!temp.mkdirs() && !temp.isDirectory) error("无法创建临时解包目录: ${temp.absolutePath}")
+        val root = temp.canonicalFile
+        val manifest = StringBuilder()
         XZInputStream(BufferedInputStream(FileInputStream(archive), BUFFER_SIZE)).use { xz ->
             TarArchiveInputStream(xz).use { tar ->
                 var written = 0L
@@ -106,13 +139,20 @@ object JcefNativesInstaller {
                         continue
                     }
                     target.parentFile?.mkdirs()
-                    FileOutputStream(target).use { out ->
-                        val copied = tar.copyTo(out, BUFFER_SIZE)
-                        written += copied
-                    }
+                    val copied = FileOutputStream(target).use { out -> tar.copyTo(out, BUFFER_SIZE) }
+                    written += copied
+                    manifest.append(name).append('\t').append(copied).append('\n')
                 }
                 Log.i(TAG, "CEF natives unpacked: ${written / 1024 / 1024} MB")
             }
         }
+        // 就绪标记 / 清单都写进临时目录，随后随重命名一起就位，保证「可见即完整」
+        File(temp, "install.lock").createNewFile()
+        File(temp, READY_MARKER).writeText(stamp)
+        File(temp, MANIFEST).writeText(manifest.toString())
+        if (installDir.exists() && !installDir.deleteRecursively()) {
+            error("无法清理旧的 CEF 目录: ${installDir.absolutePath}")
+        }
+        if (!temp.renameTo(installDir)) error("无法启用新解包的 CEF 目录: ${installDir.absolutePath}")
     }
 }

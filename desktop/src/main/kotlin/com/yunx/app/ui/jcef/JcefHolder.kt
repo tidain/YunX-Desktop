@@ -30,6 +30,9 @@ object JcefHolder {
     private const val TAG = "YunX-JCEF"
     private const val MAX_INIT_ATTEMPTS = 3
 
+    /** 隔离目录前缀：`cache\jcef.crashed-<时间>` */
+    private const val QUARANTINE_PREFIX = "jcef.crashed-"
+
     @Volatile
     private var cefApp: CefApp? = null
 
@@ -45,6 +48,10 @@ object JcefHolder {
     private val lock = Any()
     private var initThread: Thread? = null
 
+    /** 一次性：本次进程是否已做过「上次异常退出」的检测（多次重试只做一次） */
+    @Volatile
+    private var crashRecoveryDone = false
+
     fun initBlocking() {
         synchronized(lock) {
             if (browserReady) return
@@ -56,6 +63,7 @@ object JcefHolder {
                         Thread.sleep(600L * (attempt - 1))
                     }
                     killStaleJcefHelpers()
+                    recoverFromAbnormalExit()
                     val builder = CefAppBuilder()
                     val installDir = File(AppContext.cacheDir, "jcef-bundle")
                     builder.setInstallDir(installDir)
@@ -78,6 +86,7 @@ object JcefHolder {
                     cefApp = builder.build()
                     browserReady = true
                     initFailure = null
+                    markRunning()
                     Log.i(TAG, "JCEF initialized (attempt $attempt)")
                     return
                 } catch (t: Throwable) {
@@ -140,5 +149,57 @@ object JcefHolder {
             Log.w(TAG, "CefApp dispose failed: ${it.message}")
         }
         cefApp = null
+        // 正常释放：清掉运行标记，避免下次启动被误判为异常退出
+        runCatching { runningMarker().delete() }
+    }
+
+    /** 运行中标记：CEF 初始化成功后写入，正常退出时删除；启动时若仍存在，说明上次没有正常释放 */
+    private fun runningMarker(): File = File(AppContext.cacheDir, ".yunx-jcef-running")
+
+    private fun markRunning() {
+        runCatching { runningMarker().writeText(System.currentTimeMillis().toString()) }
+            .onFailure { Log.w(TAG, "写入运行标记失败: ${it.message}") }
+    }
+
+    /**
+     * 处理上次异常退出（issue #34）：
+     * 启动时若发现「CEF 已初始化成功、但没有正常释放」的残留标记，说明上个进程多半是被 libcef 的
+     * fail-fast 直接带走（日志最后一行停在 `JCEF initialized`，随后 csrss 弹「中断点 已到达中断点」，
+     * 退出码 0x80000003）。这种情况下 CEF 用户数据目录（cache\jcef）往往已损坏且不会自愈，
+     * 因此把它整体隔离（重命名为 `jcef.crashed-<时间>`，留一份供排查）后由 CEF 重建全新 profile。
+     * 只隔离一次：隔离 / 删除成功才清标记，失败则保留标记供下次启动重试。
+     */
+    private fun recoverFromAbnormalExit() {
+        if (crashRecoveryDone) return
+        crashRecoveryDone = true
+        val marker = runningMarker()
+        if (!marker.isFile) return
+        Log.w(TAG, "检测到上次异常退出（CEF 未正常释放），隔离并重建浏览器数据目录")
+        if (quarantineProfile()) {
+            runCatching { marker.delete() }
+        } else {
+            Log.w(TAG, "浏览器数据目录隔离失败，保留标记供下次启动重试")
+        }
+    }
+
+    /** 隔离（优先重命名，失败则退回删除）疑似损坏的 CEF profile；处理成功返回 true */
+    private fun quarantineProfile(): Boolean {
+        val profile = File(AppContext.cacheDir, "jcef")
+        if (!profile.exists()) return true
+        val quarantined = File(AppContext.cacheDir, "$QUARANTINE_PREFIX${System.currentTimeMillis()}")
+        if (runCatching { profile.renameTo(quarantined) }.getOrDefault(false)) {
+            Log.w(TAG, "已将疑似损坏的浏览器数据目录隔离到 ${quarantined.name}")
+            pruneQuarantines(keep = quarantined.name)
+            return true
+        }
+        Log.w(TAG, "重命名隔离失败，改为直接删除浏览器数据目录")
+        return runCatching { profile.deleteRecursively() }.getOrDefault(false)
+    }
+
+    /** 只保留最近一次隔离目录，避免崩溃反复发生时把磁盘撑满 */
+    private fun pruneQuarantines(keep: String) {
+        AppContext.cacheDir.listFiles()
+            ?.filter { it.isDirectory && it.name.startsWith(QUARANTINE_PREFIX) && it.name != keep }
+            ?.forEach { runCatching { it.deleteRecursively() } }
     }
 }

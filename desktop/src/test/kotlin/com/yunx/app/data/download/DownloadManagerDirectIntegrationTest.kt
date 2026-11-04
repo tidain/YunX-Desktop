@@ -363,7 +363,15 @@ class DownloadManagerDirectIntegrationTest {
         assertTrue("不应残留直写临时文件：${leftovers.map { it.name }}", leftovers.isEmpty())
     }
 
-    private fun assertNoCacheChunks(id: Long) {
+    private suspend fun assertNoCacheChunks(id: Long) {
+        // 任务状态先落库（completeWithAvg）、分片目录随后才删（finishDownload 收尾）：
+        // 直接断言会与清理赛跑，机器慢时偶发失败 —— 先等清理完成再断言。
+        val deadline = System.currentTimeMillis() + 10_000
+        while (System.currentTimeMillis() < deadline &&
+            File(AppContext.downloadTmpDir, "download_tmp/$id").exists()
+        ) {
+            delay(50)
+        }
         assertFalse(File(AppContext.downloadTmpDir, "$id").exists())
         assertFalse(File(AppContext.downloadTmpDir, "download_tmp/$id").exists())
     }

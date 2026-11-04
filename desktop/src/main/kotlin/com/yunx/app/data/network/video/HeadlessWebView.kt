@@ -184,6 +184,30 @@ object HeadlessWebView {
         }
     }
 
+    /**
+     * 关闭隐藏浏览器并释放 client / router（进程退出前调用）。
+     *
+     * CEF 的契约是「所有 browser 都关闭之后才能 CefShutdown」。以前退出时直接 dispose CefApp，
+     * 隐藏浏览器还活着就被强关，GPU / renderer 子进程被硬杀 —— Windows 上退出瞬间会闪两个崩溃框。
+     * 这里先关浏览器，再让 JcefHolder 释放 CefApp；任何一步失败都忽略（进程即将结束）。
+     */
+    fun closeQuietly() {
+        synchronized(browserLock) {
+            runCatching { parkScheduler.shutdownNow() }
+            val b = browser
+            browser = null
+            // force=true：不等待页面 beforeunload，立刻关闭
+            runCatching { b?.close(true) }
+            val r = router
+            router = null
+            runCatching { r?.dispose() }
+            val c = client
+            client = null
+            runCatching { c?.dispose() }
+        }
+        synchronized(lock) { active = null }
+    }
+
     private suspend fun runSession(
         url: String,
         readyCheckJs: String,

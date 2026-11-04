@@ -25,6 +25,10 @@ Write-Host "[OK] App version: $AppVersion" -ForegroundColor Green
 # 运行期由 util/PositionPicker.kt 释放到 %TEMP% 再执行 —— 便携包目录里不再出现这个 exe。
 $pickerSrc = Join-Path $root "picker\PositionPicker.cs"
 $pickerExeOut = Join-Path $root "build\YunX-PositionPicker.exe"
+# build\ 被 .gitignore 忽略：CI 全新检出时不存在，csc 会在该目录写 Win32 资源临时文件，
+# 目录缺失就直接报 CS1567「Error generating Win32 resource」，必须先建出来
+$pickerOutDir = Split-Path -Parent $pickerExeOut
+if (-not (Test-Path $pickerOutDir)) { New-Item -ItemType Directory -Force -Path $pickerOutDir | Out-Null }
 if (-not (Test-Path $pickerSrc)) { throw "picker source not found: $pickerSrc" }
 $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 if (-not (Test-Path $csc)) { throw "csc.exe not found at $csc" }

@@ -83,6 +83,18 @@ class SettingsRepository {
             prefs.putBoolean("keep_awake_downloading", value)
         }
 
+    /**
+     * 全部下载任务结束后自动关机（下载页「完成后关机」开关）。
+     *
+     * 这里只存开关值：真正的判定与倒计时由 [com.yunx.app.ui.viewmodel.DownloadViewModel] 常驻的
+     * 观察协程负责（放在 ViewModel 而不是下载页，切到别的 Tab 下载页被销毁也照样生效）。
+     */
+    var shutdownWhenDownloadsComplete: Boolean
+        get() = prefs.getBoolean("shutdown_when_downloads_complete", false)
+        set(value) {
+            prefs.putBoolean("shutdown_when_downloads_complete", value)
+        }
+
     /** 通知中心进度样式（Windows 通知中心 toast：true 时进度条附带下载速度） */
     var notificationShowSpeed: Boolean
         get() = prefs.getBoolean("notification_show_speed", true)

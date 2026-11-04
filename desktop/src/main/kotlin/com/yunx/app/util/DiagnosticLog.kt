@@ -1,5 +1,7 @@
 package com.yunx.app.util
 
+import com.yunx.app.APP_IS_PREVIEW
+import com.yunx.app.APP_VERSION
 import com.yunx.app.AppContext
 import com.yunx.app.data.prefs.SettingsRepository
 import java.io.BufferedOutputStream
@@ -262,27 +264,137 @@ object DiagnosticLog {
         )
     }
 
-    /** 导出 zip：`yunx_diagnostic_logs_yyyyMMdd_HHmmss.zip`（先 flush，确保最新日志在里面） */
+    /**
+     * 导出 zip：`yunx_diagnostic_logs_yyyyMMdd_HHmmss.zip`（先 flush，确保最新日志在里面）。
+     *
+     * 除分模块诊断日志外，还带上**应用主日志 / CEF 日志 / JVM 崩溃留痕 / 环境快照**：
+     * 「启动几秒后进程自己消失」这类问题在 Java 侧一行都写不出来（见 [harvestJvmCrashLogs]），
+     * 这几份才是唯一能定位现场的线索。
+     */
     fun exportZip(): File? = runCatching {
         flush(3000)
         val src = dirOf()
         val files = src.listFiles()?.filter { it.isFile }?.sortedBy { it.name }.orEmpty()
-        if (files.isEmpty()) return@runCatching null
         val outDir = File(AppContext.cacheDir, "logs").apply { mkdirs() }
         val stamp = synchronized(timeFormatLock) { fileTimeFormat.format(Date()) }
         val out = File(outDir, "yunx_diagnostic_logs_$stamp.zip")
         ZipOutputStream(BufferedOutputStream(FileOutputStream(out))).use { zip ->
-            files.forEach { f ->
-                zip.putNextEntry(ZipEntry(f.name))
-                f.inputStream().use { input -> input.copyTo(zip) }
-                zip.closeEntry()
+            files.forEach { f -> zip.addExisting(f.name, f) }
+            zip.addExisting("app/yunx-desktop.log", File(AppContext.filesDir, "yunx-desktop.log"))
+            zip.addExisting("app/yunx-desktop.1.log", File(AppContext.filesDir, "yunx-desktop.1.log"))
+            zip.addExisting("app/jcef.log", File(AppContext.filesDir, "jcef.log"))
+            File(AppContext.filesDir, CRASH_DIR).listFiles()?.sortedBy { it.name }?.forEach { f ->
+                zip.addExisting("crash/${f.name}", f)
             }
+            zip.putNextEntry(ZipEntry("environment.txt"))
+            zip.write(environmentSnapshot().toByteArray(Charsets.UTF_8))
+            zip.closeEntry()
         }
         Log.d(TAG, "诊断日志已打包：${out.absolutePath}（${files.size} 个文件，${out.length()} 字节）")
         out
     }.onFailure { Log.e(TAG, "打包诊断日志失败：${it.message}", it) }.getOrNull()
 
+    /**
+     * 收集 JVM 硬崩溃留痕（`hs_err_pid*.log` / `replay_pid*.log`）。
+     *
+     * 进程被原生层直接带走时（事件查看器里的 `0xc0000005` 访问违规等），Java 侧一行日志都写不出来，
+     * 唯一的现场证据是 JVM 自己落的 hs_err 文件（默认在工作目录，便携版即 exe 所在目录）。
+     * 这里在启动时把它搬进 `<数据目录>/files/[CRASH_DIR]`，并把「Problematic frame」等关键行记进主日志，
+     * 之后导出诊断包就会一并带上 —— 否则「启动后自己消失」永远只能靠猜。
+     *
+     * @return 本次收集到的崩溃文件数
+     */
+    fun harvestJvmCrashLogs(): Int = runCatching {
+        val searchDirs = buildList {
+            runCatching { File(System.getProperty("user.dir").orEmpty()) }.getOrNull()?.let(::add)
+            runCatching { AppContext.appRootDir }.getOrNull()?.let(::add)
+            // 启动器把 -XX:ErrorFile 指向这里（便携版解压在只读位置时工作目录写不进去）
+            runCatching { File(localAppData(), "YunX-Desktop") }.getOrNull()?.let(::add)
+        }.distinctBy { runCatching { it.canonicalPath }.getOrDefault(it.absolutePath) }
+        val found = searchDirs.flatMap { dir ->
+            dir.listFiles()?.filter { it.isFile && it.name.isJvmCrashFile() }.orEmpty()
+        }.distinctBy { it.absolutePath }
+        if (found.isEmpty()) return@runCatching 0
+        val keepDir = File(AppContext.filesDir, CRASH_DIR).apply { mkdirs() }
+        found.forEach { src ->
+            val dst = File(keepDir, src.name)
+            val moved = runCatching { src.renameTo(dst) }.getOrDefault(false)
+            if (!moved) {
+                runCatching { src.copyTo(dst, overwrite = true) }
+                runCatching { src.delete() }
+            }
+            val headline = crashHeadline(dst)
+            Log.w(TAG, "检测到上次 JVM 崩溃留痕：${dst.absolutePath}$headline")
+            warn(OPERATION, "jvm_crash_detected", "file=${dst.name}$headline")
+        }
+        found.size
+    }.onFailure { Log.w(TAG, "收集 JVM 崩溃留痕失败：${it.message}") }.getOrDefault(0)
+
+    /** 请求下次导出时用到的环境快照（zip 里的 environment.txt） */
+    private fun environmentSnapshot(): String = buildString {
+        appendLine("导出时间=${formatTime(System.currentTimeMillis())}")
+        appendLine("版本=$APP_VERSION${if (APP_IS_PREVIEW) "（Beta）" else ""}")
+        appendLine("OS=${System.getProperty("os.name")} ${System.getProperty("os.version")} ${System.getProperty("os.arch")}")
+        appendLine("Java=${System.getProperty("java.version")}（${System.getProperty("java.vendor")}）")
+        appendLine("java.home=${System.getProperty("java.home")}")
+        appendLine("工作目录=${System.getProperty("user.dir")}")
+        appendLine("数据目录=${AppContext.dataDir}")
+        appendLine("数据库目录=${AppContext.dbDir}")
+        appendLine("缓存目录=${AppContext.cacheDir}")
+        appendLine("渲染后端=${System.getProperty("skiko.renderApi") ?: "(默认)"}")
+        appendLine("CPU 核数=${Runtime.getRuntime().availableProcessors()}")
+        val rt = Runtime.getRuntime()
+        appendLine("堆内存 max=${rt.maxMemory() / MB}MB used=${(rt.totalMemory() - rt.freeMemory()) / MB}MB")
+        appendLine(
+            "屏幕数=" + runCatching {
+                java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment().screenDevices.size
+            }.getOrDefault(-1)
+        )
+        appendLine(
+            "CEF profile=${File(AppContext.cacheDir, "jcef").exists()} " +
+                "bundle=${File(AppContext.cacheDir, "jcef-bundle").exists()} " +
+                "运行标记=${File(AppContext.cacheDir, ".yunx-jcef-running").exists()}"
+        )
+        appendLine("诊断日志目录=${dirOf().absolutePath}")
+    }
+
+    /** 正常退出：写在进程退出钩子里。下次看到「有 session_start 没有 session_end」= 上次被硬崩带走 */
+    fun sessionEnd() {
+        event(OPERATION, "diagnostic_session_end", "进程正常退出")
+        flush(500)
+    }
+
     // ---------- 内部实现 ----------
+
+    private const val CRASH_DIR = "jvm-crash"
+    private const val MB = 1024L * 1024L
+
+    private fun String.isJvmCrashFile(): Boolean =
+        startsWith("hs_err_pid") || startsWith("replay_pid")
+
+    private fun localAppData(): String =
+        System.getenv("LOCALAPPDATA") ?: System.getProperty("java.io.tmpdir", "")
+
+    /** 从 hs_err 里挑最有用的几行（信号 / 问题帧 / 命令行），塞进一条日志摘要 */
+    private fun crashHeadline(file: File): String = runCatching {
+        val keys = listOf("# A fatal error", "# Problematic frame", "SIGSEGV", "Command Line", "# Core dump")
+        val picked = file.useLines { lines ->
+            lines.map { it.trim() }
+                .filter { line -> line.isNotEmpty() && keys.any { line.startsWith(it) || line.contains(it) } }
+                .take(4)
+                .toList()
+        }
+        if (picked.isEmpty()) "" else picked.joinToString(" | ", prefix = " | ")
+    }.getOrDefault("")
+
+    private fun ZipOutputStream.addExisting(entryName: String, file: File) {
+        if (!file.isFile) return
+        runCatching {
+            putNextEntry(ZipEntry(entryName))
+            file.inputStream().use { input -> input.copyTo(this) }
+            closeEntry()
+        }.onFailure { Log.w(TAG, "诊断包写入失败（跳过）：$entryName ${it.message}") }
+    }
 
     /** 固定落在数据目录下（桌面没有「外部私有目录」的概念，用户可直接在资源管理器里打开） */
     private fun resolveDir(): File {

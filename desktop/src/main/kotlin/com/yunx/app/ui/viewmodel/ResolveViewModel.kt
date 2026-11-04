@@ -575,9 +575,16 @@ class ResolveViewModel(
                 val sizes = tasks.map { it.first.fsize }
                 // 仅「下载路径需先转存」的平台会占用目标账号空间；
                 // UC / 139 / 123 等直接取分享直链、不占空间，无需校验。
-                val downloadTransfers = currentPlatform == SharePlatform.QUARK ||
-                    currentPlatform == SharePlatform.XUNLEI ||
-                    currentPlatform == SharePlatform.BAIDU
+                // ★ 夸克开着「免转存」时，批量下载走 getShareDownloadLinkWithoutSave —— 既不建临时目录、
+                //   也不转存，**根本不占空间**。若仍按「要转存」做整批预算，网盘满了的用户会被
+                //   「剩余空间不足」整批挡住，正好和免转存的初衷相反。
+                //   个别文件免转存失败、回退到转存时，由逐项校验兜底（下面 batchChecked 保持 false）。
+                val noSaveThisBatch = noSaveDownloadProvider() && currentPlatform == SharePlatform.QUARK
+                val downloadTransfers = !noSaveThisBatch && (
+                    currentPlatform == SharePlatform.QUARK ||
+                        currentPlatform == SharePlatform.XUNLEI ||
+                        currentPlatform == SharePlatform.BAIDU
+                    )
                 // 多账号下载（实验性 C1）：按文件轮换该网盘的不同账号取链（主账号在前）。
                 // 开关关闭 / 只有主账号时这里就是 [quarkCred] 一项，行为与开启前完全一致。
                 var credentialPool = if (credential.isBlank()) emptyList() else credentialRotation(quarkCred)

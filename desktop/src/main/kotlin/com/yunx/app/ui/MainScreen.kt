@@ -30,6 +30,7 @@ import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -1434,6 +1435,10 @@ fun MainScreen(
             }
         )
 
+        // 下载完成后关机：全部任务结束时弹倒计时确认（可取消）。放在 MainScreen 根部而非下载页，
+        // 这样切到别的 Tab（下载页被销毁）时仍能看到并取消倒计时；判定逻辑在 DownloadViewModel。
+        DownloadShutdownDialog(downloadViewModel)
+
         // GitHub Token 配置弹窗（网盘页入口）：AES-GCM 加密存储，输入用密码可见性切换
         if (showGitHubTokenDialog) {
             var tokenInput by rememberSaveable { mutableStateOf(GitHubTokenStore.getToken() ?: "") }
@@ -1629,6 +1634,41 @@ fun MainScreen(
         }
         }
     }
+}
+
+/**
+ * 「下载完成后关机」倒计时确认弹窗。
+ *
+ * 只在 [DownloadViewModel.shutdownCountdown] 非空时显示（倒计时剩余秒数）。
+ * 单独抽成一个 composable，让它自己订阅倒计时状态：每秒只重组这一小块，
+ * 不会带着整个 MainScreen（很大）每秒重组一次。
+ *
+ * 点遮罩不关闭（[FadeAlertDialog.onDismissRequest] 空实现）：这个弹窗是「即将关机」的最后提醒，
+ * 误触关闭后仍会照常关机，所以只能显式选「取消关机」或「立即关机」。
+ */
+@Composable
+private fun DownloadShutdownDialog(viewModel: DownloadViewModel) {
+    val countdown by viewModel.shutdownCountdown.collectAsState()
+    val seconds = countdown ?: return
+    val cancelButton: (@Composable () -> Unit)? = if (seconds > 0) {
+        { TextButton(onClick = { viewModel.cancelShutdownCountdown() }) { Text("取消关机") } }
+    } else null
+    FadeAlertDialog(
+        visible = true,
+        onDismissRequest = {},
+        title = { Text("下载已完成") },
+        text = {
+            Text(
+                if (seconds > 0) "全部下载任务已完成，将在 $seconds 秒后自动关机。"
+                else "正在关机…",
+                style = MaterialTheme.typography.bodyMedium
+            )
+        },
+        confirmButton = {
+            Button(onClick = { viewModel.shutdownNow() }) { Text("立即关机") }
+        },
+        dismissButton = cancelButton
+    )
 }
 
 /**

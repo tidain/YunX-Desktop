@@ -94,8 +94,8 @@ object WindowFx {
         }
         val title = frame.title
         Thread {
-            val faded = runCatching {
-                val hwnd = findHwnd(title) ?: return@runCatching false
+            runCatching {
+                val hwnd = findHwnd(title) ?: return@runCatching
                 // 先加分层样式并设为不透明（加样式瞬间窗口会停止渲染，必须立刻设属性）
                 val ex = api.GetWindowLongW(hwnd, GWL_EXSTYLE)
                 api.SetWindowLongW(hwnd, GWL_EXSTYLE, ex or WS_EX_LAYERED)
@@ -106,12 +106,11 @@ object WindowFx {
                     api.SetLayeredWindowAttributes(hwnd, 0, alpha.toByte(), LWA_ALPHA)
                     Thread.sleep(10)
                 }
-                true
-            }.getOrDefault(false)
-            EventQueue.invokeLater {
-                runCatching { if (faded) frame.isVisible = false }
-                onDone()
             }
+            // 淡到 alpha=0 后窗口已经看不见了，不再额外 `isVisible = false`：
+            // 关闭过程中再触发一次 AWT 可见性/尺寸事件时 Compose 场景已经 close，
+            // 会抛 "size set after ComposeScene is closed"（退出时弹原生 Error 对话框）。
+            EventQueue.invokeLater { onDone() }
         }.apply {
             isDaemon = true
             name = "window-fade-out"

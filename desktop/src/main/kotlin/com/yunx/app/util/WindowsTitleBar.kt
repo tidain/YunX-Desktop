@@ -80,7 +80,9 @@ object WindowsTitleBar {
                 val pidRef = com.sun.jna.ptr.IntByReference()
                 user32.GetWindowThreadProcessId(hwnd, pidRef)
                 // 只处理本进程的顶层窗口（GA_ROOT 即自身），子窗口无需也无效
-                if (pidRef.value.toLong() == myPid && isTopLevelWindow(user32, hwnd)) {
+                if (pidRef.value.toLong() == myPid && isTopLevelWindow(user32, hwnd) &&
+                    isStyleableWindow(user32, hwnd)
+                ) {
                     if (setDarkAttribute(api, hwnd, dark)) anySuccess = true
                 }
                 true
@@ -124,6 +126,21 @@ object WindowsTitleBar {
 
     private fun isTopLevelWindow(user32: User32, hwnd: WinDef.HWND): Boolean =
         runCatching { user32.GetAncestor(hwnd, WinUser.GA_ROOT) == hwnd }.getOrDefault(false)
+
+    /**
+     * 是否值得设置深色标题栏（只认「我们自己画、带标题」的窗口）。
+     *
+     * - **内嵌浏览器的隐藏窗口**（JCEF 窗口类名含 `Cef`）：它没有标题栏，设 DWM 属性没有任何效果，
+     *   反而可能打乱它的合成状态 —— 切主题后退出应用时闪的那两个崩溃框就出在这里的子进程上；
+     * - **无标题窗口**（工具窗 / 无边框弹层）：本来就没有标题栏可上色。
+     */
+    private fun isStyleableWindow(user32: User32, hwnd: WinDef.HWND): Boolean = runCatching {
+        val buf = CharArray(256)
+        val len = user32.GetClassName(hwnd, buf, buf.size)
+        val className = if (len > 0) String(buf, 0, len) else ""
+        if (className.contains("Cef", ignoreCase = true)) return@runCatching false
+        user32.GetWindowTextLength(hwnd) > 0
+    }.getOrDefault(true)
 
     /**
      * 查询 Windows 系统级「应用深色模式」开关（用于「跟随系统」模式）。

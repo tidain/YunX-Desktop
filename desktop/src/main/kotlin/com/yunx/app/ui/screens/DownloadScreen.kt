@@ -46,6 +46,7 @@ import androidx.compose.material.icons.outlined.InsertDriveFile
 import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material.icons.outlined.Power
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -61,6 +62,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarScrollBehavior
@@ -76,6 +78,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.input.pointer.PointerEventType
@@ -115,6 +118,8 @@ fun DownloadScreen(
 ) {
     val tasks by viewModel.tasks.collectAsState()
     val stats by viewModel.stats.collectAsState()
+    // 「下载完成后关机」开关（持久化在 ViewModel/设置里；判定与倒计时也在 ViewModel，见其 shutdown 段）
+    val shutdownWhenDone by viewModel.shutdownWhenDone.collectAsState()
     // 任务列表滚动状态（右侧滚动条 / 定位用）
     val listState = rememberLazyListState()
     val settingsRepo = remember { SettingsRepository() }
@@ -165,8 +170,10 @@ fun DownloadScreen(
                         it.status == DownloadTaskEntity.STATUS_PAUSED ||
                             it.status == DownloadTaskEntity.STATUS_FAILED
                     },
+                    shutdownWhenDone = shutdownWhenDone,
                     onPauseAll = { viewModel.pauseAll() },
                     onResumeAll = { viewModel.resumeAll() },
+                    onShutdownToggle = { viewModel.setShutdownWhenDone(it) },
                     onDeleteAll = { showDeleteAllConfirm = true }
                 )
                 // 右侧常驻滚动条：任务多时可拖动定位、一眼看到当前位置，不必一直滚轮（滚轮照常可用）
@@ -348,13 +355,20 @@ fun DownloadScreen(
     }
 }
 
-/** 批量操作栏：全部暂停 / 全部开始 / 删除全部（Material3 紧凑按钮，无可用操作时禁用） */
+/**
+ * 批量操作栏：全部暂停 / 全部开始 / 完成后关机 / 删除全部（Material3 紧凑按钮，无可用操作时禁用）。
+ *
+ * 「完成后关机」是唯一的持久化开关（存设置）：开启后，待所有任务结束（无下载中/等待中，也没有
+ * 被暂停的任务）时弹倒计时确认再关机，详见 DownloadViewModel 的 shutdown 段。
+ */
 @Composable
 private fun DownloadBatchBar(
     hasActive: Boolean,
     hasResumable: Boolean,
+    shutdownWhenDone: Boolean,
     onPauseAll: () -> Unit,
     onResumeAll: () -> Unit,
+    onShutdownToggle: (Boolean) -> Unit,
     onDeleteAll: () -> Unit
 ) {
     Row(
@@ -382,6 +396,44 @@ private fun DownloadBatchBar(
             Text("全部开始")
         }
         Spacer(modifier = Modifier.weight(1f))
+        // 完成后关机：整行可点（含文字），开关本身不单独响应点击
+        val onTint = MaterialTheme.colorScheme.primary
+        val offTint = MaterialTheme.colorScheme.onSurfaceVariant
+        Row(
+            modifier = Modifier.toggleable(
+                value = shutdownWhenDone,
+                role = Role.Switch,
+                onValueChange = onShutdownToggle
+            ),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.Power,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+                tint = if (shutdownWhenDone) onTint else offTint
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = "完成后关机",
+                style = MaterialTheme.typography.labelLarge,
+                color = if (shutdownWhenDone) onTint else offTint
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            // 开关比旁边 16dp 的图标/文字明显偏大：用 Box 收窄布局占位 + scale 缩小视觉，
+            // 否则 Switch 自身 52x32dp 的布局会在行内多留一段空白（scale 只改绘制不改布局）
+            Box(
+                modifier = Modifier.size(width = 38.dp, height = 24.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Switch(
+                    checked = shutdownWhenDone,
+                    onCheckedChange = null,
+                    modifier = Modifier.scale(0.72f)
+                )
+            }
+        }
+        Spacer(modifier = Modifier.width(8.dp))
         TextButton(onClick = onDeleteAll) {
             Icon(
                 imageVector = Icons.Outlined.Delete,

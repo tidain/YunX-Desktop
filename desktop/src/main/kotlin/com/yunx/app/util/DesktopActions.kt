@@ -130,6 +130,23 @@ object DesktopActions {
         }.getOrDefault(false)
     }
 
+    /**
+     * 关闭计算机（「下载完成后关机」用）。
+     *
+     * 走系统 shutdown 命令：普通用户本地关机不需要管理员权限（SeShutdownPrivilege），
+     * 调用方无需提权。非 Windows 直接返回 false（本功能目前仅在桌面端 Windows 提供）。
+     *
+     * @param seconds 关机前延迟秒数（0 = 立即关机）；调用方负责在倒计时期间决定是否取消
+     * @return 是否成功发起
+     */
+    fun shutdownComputer(seconds: Int = 0): Boolean {
+        if (!WindowsTitleBar.isWindows) return false
+        return runCatching {
+            ProcessBuilder("shutdown", "/s", "/t", seconds.coerceAtLeast(0).toString()).start()
+            true
+        }.getOrDefault(false)
+    }
+
     /** 便携版/安装版的启动器 exe：优先 jpackage 注入的路径，否则取工作目录下的 YunX-Desktop.exe */
     private fun launcherExe(): File? {
         System.getProperty("jpackage.app-path")?.let { p ->

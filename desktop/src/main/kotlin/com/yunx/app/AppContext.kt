@@ -1,5 +1,6 @@
 package com.yunx.app
 
+import com.yunx.app.data.storage.StorageMigrator
 import com.yunx.app.util.Log
 import java.io.File
 import java.util.prefs.Preferences
@@ -139,12 +140,22 @@ object AppContext {
                 val newReady = cacheDir.isDirectory && cacheDir.listFiles()?.isNotEmpty() == true
                 when {
                     sameDir(oldDir, cacheDir) -> miscPrefs.remove(KEY_CACHE_MIGRATED_FROM)
-                    // ★ 仅当新缓存目录确已就位才删旧目录，避免把唯一一份数据删掉
-                    oldDir.isDirectory && newReady && oldDir.deleteRecursively() -> {
-                        Log.i("YunX-DataDir", "已清理迁移后的旧缓存目录：${oldDir.absolutePath}")
+                    // ★ 仅当新缓存目录确已就位、且旧目录确实是本应用独占的缓存目录时才删，
+                    //   避免把唯一一份数据删掉 —— 也避免删掉盘符根 / 新目录的祖先（那是整块盘）
+                    oldDir.isDirectory && newReady && canDeleteOldCacheDir(oldDir) -> {
+                        if (oldDir.deleteRecursively()) {
+                            Log.i("YunX-DataDir", "已清理迁移后的旧缓存目录：${oldDir.absolutePath}")
+                            miscPrefs.remove(KEY_CACHE_MIGRATED_FROM)
+                        }
+                        // 删除失败（文件被占用）：保留标记，下次启动再试
+                    }
+                    oldDir.isDirectory && newReady -> {
+                        // 旧位置是盘符根 / 新目录的祖先 / 混着用户自己的文件：宁可留着旧缓存，
+                        // 也绝不整棵递归删除（曾经把用户整个盘清空的正是这里）
+                        Log.w("YunX-DataDir", "旧缓存目录不适合整棵删除，已跳过：${oldDir.absolutePath}")
                         miscPrefs.remove(KEY_CACHE_MIGRATED_FROM)
                     }
-                    // 新位置还没就位、或删除失败（文件被占用）：保留标记，下次启动再试
+                    // 新位置还没就位：保留标记，下次启动再试
                 }
             }
         }.onFailure { Log.w("YunX-DataDir", "清理迁移残留失败：${it.message}") }
@@ -153,6 +164,28 @@ object AppContext {
     /** 两个 File 是否指向同一位置（canonicalPath 取不到时退回绝对路径比较） */
     private fun sameDir(a: File, b: File): Boolean =
         runCatching { a.canonicalPath == b.canonicalPath }.getOrDefault(a.absolutePath == b.absolutePath)
+
+    /**
+     * 旧缓存目录能否整棵删除。
+     *
+     * ★ 曾把缓存目录设到盘符根（`D:\`）的用户，若在这里直接 `deleteRecursively()`，会被清空一整块盘。
+     *   所以只有「确实是本应用独占的缓存目录」才允许递归删除：
+     * - 不是盘符根（`D:\` 没有父目录）；
+     * - 不是当前缓存 / 数据根 / 用户主目录 / 应用根目录的祖先（删旧会把它们一起删掉）；
+     * - 顶层条目全部属于本应用（混着用户自己的文件就只保留，宁可留下旧缓存）。
+     */
+    private fun canDeleteOldCacheDir(oldDir: File): Boolean {
+        val oldPath = runCatching { oldDir.canonicalFile.toPath() }.getOrNull() ?: return false
+        if (oldPath.parent == null) return false
+        val mustKeep = listOfNotNull(
+            runCatching { cacheDir.canonicalFile.toPath() }.getOrNull(),
+            runCatching { dataDir.canonicalFile.toPath() }.getOrNull(),
+            runCatching { File(System.getProperty("user.home").orEmpty()).canonicalFile.toPath() }.getOrNull(),
+            runCatching { appRootDir.canonicalFile.toPath() }.getOrNull()
+        )
+        if (mustKeep.any { it.startsWith(oldPath) }) return false
+        return oldDir.listFiles()?.all { StorageMigrator.isOwnedCacheEntry(it.name) } == true
+    }
 
     /** 读取配置的目录；未配置或目录不可用（被删/无权限）时回退默认值，绝不让应用起不来 */
     private fun resolveConfiguredDir(key: String, defaultDir: File): File {

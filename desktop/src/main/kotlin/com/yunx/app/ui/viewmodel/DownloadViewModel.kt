@@ -9,16 +9,28 @@ import com.yunx.app.data.db.DownloadTaskEntity
 import com.yunx.app.data.download.DownloadDebugLog
 import com.yunx.app.data.download.DownloadManager
 import com.yunx.app.data.download.DownloadStats
+import com.yunx.app.data.prefs.SettingsRepository
 import com.yunx.app.ui.SnackbarController
+import com.yunx.app.util.DesktopActions
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 /**
  * 下载页 ViewModel：任务列表（Room Flow → StateFlow）+ 实时统计 + 操作转发。
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 class DownloadViewModel(private val manager: DownloadManager) : ViewModel() {
+
+    private val settings = SettingsRepository()
 
     val tasks: StateFlow<List<DownloadTaskEntity>> = manager.tasks
         .stateIn(
@@ -77,6 +89,102 @@ class DownloadViewModel(private val manager: DownloadManager) : ViewModel() {
     /** 删除全部任务（可同时删除已保存到本地的文件） */
     fun removeAll(deleteLocal: Boolean = false) {
         tasks.value.toList().forEach { manager.remove(it.id, deleteLocal) }
+    }
+
+    // ---------- 下载完成后关机 ----------
+    // 放在 ViewModel 而不是下载页：切到别的 Tab 时下载页会被销毁，但 ViewModel 常驻，
+    // 观察协程仍能等到「任务全部结束」再触发关机（用户正是会切走或最小化到托盘等下载）。
+
+    /** 「下载完成后关机」开关（与设置持久化同步，下载页批量操作栏的开关观察它） */
+    private val _shutdownWhenDone = MutableStateFlow(settings.shutdownWhenDownloadsComplete)
+    val shutdownWhenDone: StateFlow<Boolean> = _shutdownWhenDone.asStateFlow()
+
+    /** 关机倒计时剩余秒数；null = 未在倒计时（UI 据此显示/隐藏关机确认弹窗） */
+    private val _shutdownCountdown = MutableStateFlow<Int?>(null)
+    val shutdownCountdown: StateFlow<Int?> = _shutdownCountdown.asStateFlow()
+
+    /** 关机倒计时总秒数（留出取消时间，避免误关） */
+    private val shutdownCountdownSeconds = 60
+
+    /** 是否已观察到「有任务在下载」：只有真正跑过任务、再全部结束才触发，避免开着开关时误判 */
+    private var shutdownArmed = false
+
+    /** 当前倒计时协程（取消/新任务到来时中止） */
+    private var shutdownJob: Job? = null
+
+    init {
+        // 开关开启期间才订阅任务流（关闭后不再占用 Room 观察）。
+        // 注意：这是**全应用常驻**的观察，与下载页是否显示无关。
+        viewModelScope.launch {
+            _shutdownWhenDone.flatMapLatest { enabled ->
+                if (!enabled) {
+                    shutdownArmed = false
+                    stopShutdownCountdown()
+                    flowOf(emptyList<DownloadTaskEntity>())
+                } else {
+                    manager.tasks
+                }
+            }.collect { list ->
+                if (!_shutdownWhenDone.value) return@collect
+                val hasActive = list.any {
+                    it.status == DownloadTaskEntity.STATUS_DOWNLOADING ||
+                        it.status == DownloadTaskEntity.STATUS_PENDING
+                }
+                if (hasActive) {
+                    // 有任务在跑：撤销可能已在进行的倒计时（说明用户又加了任务），并武装等待其结束
+                    stopShutdownCountdown()
+                    shutdownArmed = true
+                } else if (shutdownArmed && list.isNotEmpty() &&
+                    list.none { it.status == DownloadTaskEntity.STATUS_PAUSED }
+                ) {
+                    // 队列已排空（只剩完成/失败，且没有用户主动暂停的任务）→ 开始关机倒计时
+                    startShutdownCountdown()
+                }
+            }
+        }
+    }
+
+    /** 开关切换：写入设置并同步 UI 状态；关闭时立即取消倒计时 */
+    fun setShutdownWhenDone(enabled: Boolean) {
+        if (_shutdownWhenDone.value == enabled) return
+        settings.shutdownWhenDownloadsComplete = enabled
+        _shutdownWhenDone.value = enabled
+        if (!enabled) cancelShutdownCountdown()
+    }
+
+    /** 用户点「取消关机」：中止倒计时，并解除武装（避免任务状态下一次变化时又立刻触发） */
+    fun cancelShutdownCountdown() {
+        stopShutdownCountdown()
+        shutdownArmed = false
+    }
+
+    /** 中止倒计时协程并清空倒计时显示 */
+    private fun stopShutdownCountdown() {
+        shutdownJob?.cancel()
+        shutdownJob = null
+        _shutdownCountdown.value = null
+    }
+
+    /** 用户点「立即关机」：跳过倒计时直接关机 */
+    fun shutdownNow() {
+        stopShutdownCountdown()
+        DesktopActions.shutdownComputer(0)
+    }
+
+    private fun startShutdownCountdown() {
+        if (shutdownJob?.isActive == true) return
+        shutdownJob = viewModelScope.launch {
+            for (s in shutdownCountdownSeconds downTo 1) {
+                _shutdownCountdown.value = s
+                delay(1000)
+            }
+            val ok = DesktopActions.shutdownComputer(0)
+            // 就地复位（不要回调 stopShutdownCountdown()：它 cancel 的正是本协程自身）
+            shutdownJob = null
+            _shutdownCountdown.value = null
+            shutdownArmed = false
+            if (!ok) SnackbarController.show("自动关机失败：当前系统不支持")
+        }
     }
 
     // ---------- 下载调试（设置 → 关于云析 → 长按 → 开发调试 → 下载调试）----------

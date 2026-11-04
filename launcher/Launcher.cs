@@ -58,7 +58,8 @@ namespace YunXDesktop
                 return RunJava(args, false);
 
             // 启动闪屏跑在主线程消息循环；JVM 创建与窗口检测在后台线程
-            splash = new SplashForm();
+            // 配色跟随应用里「设置 → 主题与外观 → 深色模式」（跟随系统 / 浅色 / 深色）
+            splash = new SplashForm(SplashForm.ResolveDark());
             var done = new ManualResetEvent(false);
             var worker = new Thread((ThreadStart)delegate
             {
@@ -108,6 +109,15 @@ namespace YunXDesktop
                 // 等效 jpackage 环境补充：原生库搜索路径（Skiko / JNA / SQLite 等）
                 javaOpts.Add("-Djava.library.path=" + appDir);
                 javaOpts.Add("-Dskiko.library.path=" + appDir);
+
+                // JVM 硬崩溃（访问违规等）的现场 hs_err：固定落到用户本地目录。
+                // 默认写「当前工作目录」，便携版若解压在只读位置（Program Files / 只读 U 盘）就写不进去，
+                // 崩溃会彻底没有线索；应用启动时会从该目录把 hs_err 收进诊断包（DiagnosticLog.harvestJvmCrashLogs）。
+                string crashDir = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                if (string.IsNullOrEmpty(crashDir)) crashDir = root;
+                crashDir = Path.Combine(crashDir, "YunX-Desktop");
+                try { Directory.CreateDirectory(crashDir); } catch { }
+                javaOpts.Add("-XX:ErrorFile=" + Path.Combine(crashDir, "hs_err_pid%p.log"));
                 // JNI 方式没有命令行 -cp，classpath 通过系统属性传入（等价 jpackage 的 -cp）
                 javaOpts.Insert(0, "-Djava.class.path=" + string.Join(";", classpath.ToArray()));
 
@@ -403,7 +413,8 @@ namespace YunXDesktop
         [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
     }
 
-    /// 启动闪屏：Win11 圆角深色卡片，微渐变背景 + 流光进度条，缓动渐显
+    /// 启动闪屏：Win11 圆角卡片，微渐变背景 + 流光进度条，缓动渐显。
+    /// 配色跟随应用里的深色模式设置（见 [ResolveDark]），默认值退化到「跟随系统」。
     class SplashForm : Form
     {
         readonly Icon appIcon;
@@ -415,12 +426,45 @@ namespace YunXDesktop
         int tick;       // 动画帧（进度条相位）
         IntPtr handleValue;   // 窗口句柄（供窗口枚举线程排除闪屏自身）
 
-        // 主题色：与深色 UI 一致的底色 + 柔和蓝的强调色
+        // 主题色：深 / 浅两套（强调色共用，与深色 UI 的柔和蓝一致）
         static readonly Color Accent = Color.FromArgb(0x5B, 0x8D, 0xFF);
+        readonly Color bgTop, bgBottom, borderColor, titleColor, mutedColor, trackColor;
 
         public IntPtr HandleValue { get { return handleValue; } }
 
-        public SplashForm()
+        /// <summary>
+        /// 解析闪屏配色：读应用「设置 → 主题与外观」的深色模式。
+        /// java.util.prefs 在 Windows 上落在 HKCU\Software\JavaSoft\Prefs\yunx\settings，
+        /// dark_mode：0=跟随系统、1=浅色、2=深色。读不到按「跟随系统」处理。
+        /// </summary>
+        public static bool ResolveDark()
+        {
+            try
+            {
+                using (var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
+                    @"Software\JavaSoft\Prefs\yunx\settings"))
+                {
+                    string raw = key != null ? key.GetValue("dark_mode") as string : null;
+                    if (raw == "1") return false;
+                    if (raw == "2") return true;
+                }
+            }
+            catch { }
+            // 跟随系统：AppsUseLightTheme=0 表示系统「应用」为深色（读不到按浅色）
+            try
+            {
+                using (var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
+                    @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"))
+                {
+                    object v = key != null ? key.GetValue("AppsUseLightTheme") : null;
+                    if (v is int) return (int)v == 0;
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        public SplashForm(bool dark)
         {
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.CenterScreen;
@@ -428,7 +472,26 @@ namespace YunXDesktop
             TopMost = true;
             DoubleBuffered = true;
             Size = new Size(460, 280);
-            BackColor = Color.FromArgb(27, 28, 31);
+            if (dark)
+            {
+                BackColor = Color.FromArgb(27, 28, 31);
+                bgTop = Color.FromArgb(38, 39, 44);
+                bgBottom = Color.FromArgb(26, 27, 31);
+                borderColor = Color.FromArgb(56, 58, 64);
+                titleColor = Color.FromArgb(236, 236, 241);
+                mutedColor = Color.FromArgb(154, 160, 166);
+                trackColor = Color.FromArgb(44, 46, 51);
+            }
+            else
+            {
+                BackColor = Color.FromArgb(246, 247, 250);
+                bgTop = Color.FromArgb(252, 252, 253);
+                bgBottom = Color.FromArgb(243, 244, 247);
+                borderColor = Color.FromArgb(224, 227, 233);
+                titleColor = Color.FromArgb(26, 28, 32);
+                mutedColor = Color.FromArgb(108, 115, 124);
+                trackColor = Color.FromArgb(226, 229, 235);
+            }
             Opacity = 0;
 
             string icoPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "YunX-Desktop.ico");
@@ -479,14 +542,14 @@ namespace YunXDesktop
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             int w = ClientSize.Width, h = ClientSize.Height;
 
-            // 背景：竖向微渐变
+            // 背景：竖向微渐变（深/浅两套配色，见构造函数）
             using (var bg = new System.Drawing.Drawing2D.LinearGradientBrush(
-                new Rectangle(0, 0, 1, h), Color.FromArgb(38, 39, 44), Color.FromArgb(26, 27, 31),
+                new Rectangle(0, 0, 1, h), bgTop, bgBottom,
                 System.Drawing.Drawing2D.LinearGradientMode.Vertical))
                 g.FillRectangle(bg, 0, 0, w, h);
 
-            // 1px 描边，在深色桌面上勾出卡片轮廓
-            using (var pen = new Pen(Color.FromArgb(56, 58, 64)))
+            // 1px 描边，勾出卡片轮廓（浅色下为浅灰，深色下为深灰）
+            using (var pen = new Pen(borderColor))
                 g.DrawRectangle(pen, 0, 0, w - 1, h - 1);
 
             // 应用图标
@@ -495,16 +558,16 @@ namespace YunXDesktop
 
             // 标题：云析 / YunX-Desktop 两行
             var sz = g.MeasureString("云析", titleFont);
-            using (var b = new SolidBrush(Color.FromArgb(236, 236, 241)))
+            using (var b = new SolidBrush(titleColor))
                 g.DrawString("云析", titleFont, b, (w - sz.Width) / 2f, 126);
             var sz2 = g.MeasureString("YunX-Desktop", subFont);
-            using (var b = new SolidBrush(Color.FromArgb(154, 160, 166)))
+            using (var b = new SolidBrush(mutedColor))
                 g.DrawString("YunX-Desktop", subFont, b, (w - sz2.Width) / 2f, 160);
 
             // 流光进度条：轨道 + 两端羽化的移动高亮段
             int trackW = 200, trackH = 4, trackY = 202;
             int trackX = (w - trackW) / 2;
-            using (var track = new SolidBrush(Color.FromArgb(44, 46, 51)))
+            using (var track = new SolidBrush(trackColor))
                 FillRounded(g, track, trackX, trackY, trackW, trackH);
 
             double phase = (tick % 110) / 110.0;
@@ -530,7 +593,7 @@ namespace YunXDesktop
 
             // 提示文字
             var hz = g.MeasureString("正在准备运行环境", hintFont);
-            using (var b = new SolidBrush(Color.FromArgb(154, 160, 166)))
+            using (var b = new SolidBrush(mutedColor))
                 g.DrawString("正在准备运行环境", hintFont, b, (w - hz.Width) / 2f, 220);
         }
 

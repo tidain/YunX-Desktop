@@ -186,6 +186,21 @@ private const val RANGE_IGNORED_TOLERANCE = 3
 private data class RetryRange(val start: Long, val end: Long, val file: File)
 
 /**
+ * 解析弹性块文件名 `seg_{start}_{end}.part` → 字节区间；文件名不合法返回 null。
+ *
+ * 弹性块的文件名即它覆盖的区间，续传时靠它判断哪些块已完成。这个解析散落在续传准备、
+ * 进度统计、失败重试、合并排序等多处，统一在这里，改命名规则时只改这一处。
+ */
+private fun parseSegRange(file: File): LongRange? {
+    val name = file.name
+    if (!name.startsWith("seg_") || !name.endsWith(".part")) return null
+    val body = name.removePrefix("seg_").removeSuffix(".part")
+    val s = body.substringBefore('_').toLongOrNull() ?: return null
+    val e = body.substringAfter('_').toLongOrNull() ?: return null
+    return s..e
+}
+
+/**
  * 弹性区动态分片分配器（IDM 式）。
  * 核心矛盾：块太大会让尾部只剩少数几个大块 → 空闲线程空转（"最后一点特别慢"）；
  * 块太小会产生海量 Range 请求 → 拖慢快连接。故不再用固定块，改为**实时速度自适应 + 尾部收缩**：
@@ -194,6 +209,11 @@ private data class RetryRange(val start: Long, val end: Long, val file: File)
  * - 稳定后块 ≈ 单 worker 下载 TARGET_SECONDS 秒的量：快则大块（省 Range 开销），慢则小块（充分并行摊平拖尾）；
  * - 尾部收缩：剩余字节 <= workers*块 时，把块压到 remaining/workers，让全部连接并行冲完最后一段，
  *   彻底消除"其他分片下完、只剩最后一个线程慢慢爬"的拖尾塌缩。
+ *
+ * 续传：[completedRanges] 是磁盘上已完整的弹性块区间，可能乱序完成（有空缺）。分配时跳过这些
+ * 区间，并把新块截断在下一个已完成区间的起点之前，因此绝不会重复下载或覆盖已完成的字节。
+ * 注意：被跳过的已完成块不登记分片摘要，因而不参与合并时的逐片 SHA-256 校验 ——
+ * 重读全部已完成区间代价过大，这部分只以「文件长度 = 区间长度」把关。
  */
 internal class ElasticAllocator(
     private val total: Long,
@@ -2064,22 +2084,19 @@ class DownloadManager(
         //   块大小随实时速度自适应并尾部收缩，保证全部连接忙到最后一块，消除"末尾只剩少数大块 → 拖尾特别慢"。
         val completedElasticRanges = mutableListOf<LongRange>()
         if (elasticStart < total) {
-            // 不完整 seg 删除（重下）
+            // 一趟遍历办两件事：
+            // - 不完整 seg 删除（重下）；
+            // - 完整块登记为「已完成区间」，包括空缺后方先完成的块（此前只推进连续前缀，那些块会被重复下载）。
+            //   只登记落在弹性区（>= elasticStart）的块，与下方进度统计口径一致，避免旧计划残留被当成已完成跳过。
             chunkDir.listFiles { f -> f.name.startsWith("seg_") && f.name.endsWith(".part") }?.forEach { f ->
-                val name = f.name.removePrefix("seg_").removeSuffix(".part")
-                val s = name.substringBefore('_').toLongOrNull() ?: return@forEach
-                val e = name.substringAfter('_').toLongOrNull() ?: return@forEach
-                if (f.length() < (e - s + 1)) f.delete()
+                val range = parseSegRange(f) ?: return@forEach
+                if (f.length() < (range.last - range.first + 1)) {
+                    f.delete()
+                } else if (range.first >= elasticStart) {
+                    completedElasticRanges += range
+                }
             }
-            // 保留所有完整块，包括空缺后方先完成的块
-            val doneSegs = chunkDir.listFiles { f -> f.name.startsWith("seg_") && f.name.endsWith(".part") }
-                ?.mapNotNull { f ->
-                    val name = f.name.removePrefix("seg_").removeSuffix(".part")
-                    val s = name.substringBefore('_').toLongOrNull() ?: return@mapNotNull null
-                    val e = name.substringAfter('_').toLongOrNull() ?: return@mapNotNull null
-                    if (f.length() >= (e - s + 1)) s to e else null
-                }?.sortedBy { it.first } ?: emptyList()
-            completedElasticRanges += doneSegs.map { (s, e) -> s..e }
+            completedElasticRanges.sortBy { it.first }
         }
         val elasticAllocator = ElasticAllocator(total, elasticStart, actualWorkers, chunkSize, completedElasticRanges)
 
@@ -2099,12 +2116,12 @@ class DownloadManager(
         val segRegionStart = mainPoolCount.toLong() * chunkSize
         chunkDir.listFiles { f -> f.name.startsWith("seg_") && f.name.endsWith(".part") }
             ?.forEach { f ->
-                val name = f.name.removePrefix("seg_").removeSuffix(".part")
-                val segStart = name.substringBefore('_').toLongOrNull()
-                val segEnd = name.substringAfter('_', "").toLongOrNull()
+                val range = parseSegRange(f) ?: return@forEach
                 // 落在主池区间里的 seg 属于旧计划残留：不计入（否则与主池的 part 重复计数）
-                if (segStart != null && segEnd != null && segStart >= segRegionStart) {
-                    downloaded.addAndGet(f.length().coerceIn(0L, (segEnd - segStart + 1).coerceAtLeast(0L)))
+                if (range.first >= segRegionStart) {
+                    downloaded.addAndGet(
+                        f.length().coerceIn(0L, (range.last - range.first + 1).coerceAtLeast(0L))
+                    )
                 }
             }
         // ★ 钳制到 total：防旧 job 残留累加导致显示"已下载 > 总大小"
@@ -2342,10 +2359,10 @@ class DownloadManager(
             }
             // 弹性区：磁盘上长度不足的区间（worker 报 OK 也不放行）
             chunkDir.listFiles { f -> f.name.startsWith("seg_") && f.name.endsWith(".part") }?.forEach { f ->
-                val key = f.name.removePrefix("seg_").removeSuffix(".part")
-                val s = key.substringBefore('_').toLongOrNull() ?: return@forEach
-                val e = key.substringAfter('_').toLongOrNull() ?: return@forEach
-                if (f.length() < (e - s + 1) && seen.add(s)) add(RetryRange(s, e, f))
+                val range = parseSegRange(f) ?: return@forEach
+                if (f.length() < (range.last - range.first + 1) && seen.add(range.first)) {
+                    add(RetryRange(range.first, range.last, f))
+                }
             }
         }
         if (missing.isNotEmpty()) {
@@ -2436,7 +2453,7 @@ class DownloadManager(
         val mainFiles = (0 until mainPoolCount).map { File(chunkDir, "part_$it") }
         val elasticFiles = chunkDir.listFiles { f ->
             f.name.startsWith("seg_") && f.name.endsWith(".part")
-        }?.sortedBy { it.name.removePrefix("seg_").substringBefore('_').toLong() }
+        }?.sortedBy { parseSegRange(it)?.first ?: Long.MAX_VALUE }
             ?: emptyList()
         return mainFiles + elasticFiles
     }

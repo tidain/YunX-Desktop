@@ -28,6 +28,9 @@ import com.yunx.app.util.Win32PopupMenu
 import com.yunx.app.util.WindowFx
 import androidx.compose.ui.graphics.toComposeImageBitmap
 
+// WindowExceptionHandler 在 Compose 1.7 仍标注为实验 API；本项目锁 1.7.3，用它是为了
+// 关掉「退出时弹原生 Error 对话框」这个默认行为（见 application{} 里的 windowErrorHandler）
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 fun main(args: Array<String>) {
     // 渲染后端：默认 OPENGL（GPU 渲染，动画流畅且文字清晰，2026-09-05 用户实测确认）。
     // 实测数据（125% DPI）：SOFTWARE 每帧 CPU 光栅化约 130 万像素，设置/下载页持续交互只有
@@ -37,6 +40,21 @@ fun main(args: Array<String>) {
 
     // 桌面上下文初始化（数据目录等）
     AppContext.init()
+
+    // ★ 全局兜底：任何线程的未捕获异常都落盘。
+    //   否则 GUI 进程一旦抛异常就是「静默消失」——启动器只把堆栈打到 stderr（双击启动时没人看得到），
+    //   用户看到的只有「应用启动后自己退出了」，无法排查。
+    Thread.setDefaultUncaughtExceptionHandler { thread, error ->
+        runCatching { com.yunx.app.util.Log.e("YunX-Crash", "未捕获异常（线程 ${thread.name}）", error) }
+        runCatching {
+            com.yunx.app.util.DiagnosticLog.error(
+                com.yunx.app.util.DiagnosticLog.OPERATION,
+                "uncaught_exception",
+                summary = "thread=${thread.name} ${error.javaClass.name}: ${error.message}"
+            )
+            com.yunx.app.util.DiagnosticLog.flush(1000)
+        }
+    }
 
     // 单实例：第二个实例只把已有窗口还原到前台，然后自身退出。
     // ★ 必须做：两个实例共用同一数据目录时，CEF 的用户数据目录（cache\jcef）会撞车 ——
@@ -63,6 +81,9 @@ fun main(args: Array<String>) {
     runCatching { com.yunx.app.ui.theme.MotionPolicy.install(softwareRendering) }
     // 诊断日志：读开关（默认关）并定好落盘目录；开着才起写线程，关着这里几乎零开销
     runCatching { com.yunx.app.util.DiagnosticLog.install() }
+    // 上次若被原生层硬崩带走（事件查看器里的 0xc0000005 访问违规等），Java 侧一行都写不出来，
+    // 只有 JVM 自己落的 hs_err 有现场：搬进数据目录并记一条 WARN，随诊断包一并带走
+    runCatching { com.yunx.app.util.DiagnosticLog.harvestJvmCrashLogs() }
     // 下载调试：读开关（默认关）。必须在任何下载开始之前装配，否则开关打开后先建的任务收不到事件
     runCatching { com.yunx.app.data.download.DownloadDebugLog.install() }
     // HTTP 代理装配：按用户设置的三选一模式注入全局 OkHttp 客户端。
@@ -122,8 +143,15 @@ fun main(args: Array<String>) {
     // 再尽力释放 JCEF
     Runtime.getRuntime().addShutdownHook(
         Thread {
+            // 正常退出标记：下次日志里如果「有 diagnostic_session_start 却没有 session_end」，
+            // 说明上次是被原生层直接带走的（Java 侧来不及写任何东西）
+            runCatching { com.yunx.app.util.DiagnosticLog.sessionEnd() }
             com.yunx.app.data.bridge.BrowserBridgeServer.stop()
             com.yunx.app.data.db.AppDatabase.checkpointOnExit()
+            // ★ CEF 的约定：所有 browser 关闭之后才能 CefShutdown。过去直接 dispose CefApp，
+            //   等于在隐藏浏览器还活着时强关，GPU / renderer 子进程会被硬杀 ——
+            //   Windows 上就表现为「退出瞬间闪两个崩溃报告框」
+            runCatching { HeadlessWebView.closeQuietly() }
             JcefHolder.disposeQuietly()
         }
     )
@@ -147,6 +175,29 @@ fun main(args: Array<String>) {
         // 把可见性回滚，导致窗口永远不显示（进程存活但无窗口）。
         val splashMode = System.getenv("YUNXPC_SPLASH") == "1"
 
+        // ★ Compose Desktop 默认把「窗口 / 场景」异常弹成原生 Error 对话框。
+        //   最容易撞上的是关闭时的良性竞态（例如切完主题就退出时报
+        //   "size set after ComposeScene is closed"）—— 进程其实已经正常退出，用户却看到一个
+        //   莫名其妙的错误框。这里改成只写日志（进主日志，随诊断包一起导出），不再打扰用户。
+        val windowErrorHandler = remember {
+            object : androidx.compose.ui.window.WindowExceptionHandler {
+                override fun onException(exception: Throwable) {
+                    com.yunx.app.util.Log.e(
+                        "YunX-Window",
+                        "窗口异常（未弹窗）：${exception.message}",
+                        exception
+                    )
+                    runCatching {
+                        com.yunx.app.util.DiagnosticLog.error(
+                            com.yunx.app.util.DiagnosticLog.OPERATION,
+                            "window_exception",
+                            summary = exception.message ?: exception.javaClass.simpleName
+                        )
+                    }
+                }
+            }
+        }
+
         // 窗口状态提升为可共享状态：视频预览的全屏开关（PreviewFullscreen）需要它
         // 启动位置：按「设置 → 主题与外观 → 窗口」的偏好决定；默认「上次关闭位置」——
         // 该项用平台默认位置起步，随后在窗口内容里按上次记录的坐标还原（见 restoreLastWindowPosition）。
@@ -166,6 +217,21 @@ fun main(args: Array<String>) {
             )
         }
 
+        // ★ 真正生效的一层：Compose 1.7 把「窗口异常处理器」放在 internal API 后面
+        //   （WindowExceptionHandlerFactory / LocalWindowExceptionHandlerFactory），
+        //   只能反射注入（见文件末尾 windowExceptionHandlerLocal / windowExceptionFactory）。
+        //   只设 ComposeWindow.exceptionHandler 是不够的：每次重组（例如切主题）Compose 都会用
+        //   CompositionLocal 里的默认工厂把它覆盖回「弹原生 Error 对话框」。
+        val exceptionLocal = remember { windowExceptionHandlerLocal() }
+        val providedValues = remember(windowErrorHandler, exceptionLocal) {
+            val factory = windowExceptionFactory(windowErrorHandler)
+            if (exceptionLocal != null && factory != null) {
+                arrayOf<androidx.compose.runtime.ProvidedValue<*>>(exceptionLocal.provides(factory))
+            } else {
+                emptyArray()
+            }
+        }
+        androidx.compose.runtime.CompositionLocalProvider(*providedValues) {
         Window(
             onCloseRequest = {
                 if (!suppressCloseRequest) closeRequested = true
@@ -176,6 +242,8 @@ fun main(args: Array<String>) {
         ) {
             androidx.compose.runtime.SideEffect {
                 mainWindow = window as? java.awt.Frame
+                // 接管窗口异常：默认实现会弹原生「Error」对话框（退出期的良性竞态也会弹）
+                runCatching { window.exceptionHandler = windowErrorHandler }
                 com.yunx.app.ui.components.PreviewFullscreen.windowState = windowState
                 // 退出全屏时恢复窗口矩形要用真实窗口（只靠 WindowState 不可靠）
                 com.yunx.app.ui.components.PreviewFullscreen.window = window
@@ -264,8 +332,48 @@ fun main(args: Array<String>) {
         // 与主窗口平级挂载——主窗口被最小化到托盘 / 被浏览器遮住时也能单独弹出，
         // 不会把整个主界面一起吊起来（区别于窗口内覆盖层的 FadeAlertDialog）。
         com.yunx.app.ui.components.BrowserHookDialogWindow()
+        }
     }
 }
+
+/**
+ * 拿到 Compose 内部那个 CompositionLocal<WindowExceptionHandlerFactory>。
+ * 名字在 1.7.3 里是 `androidx.compose.ui.window.WindowExceptionHandlerFactory_desktopKt
+ * .getLocalWindowExceptionHandlerFactory()`（Kotlin 侧标了 internal，无法直接引用）。
+ */
+private fun windowExceptionHandlerLocal(): androidx.compose.runtime.ProvidableCompositionLocal<Any>? = runCatching {
+    val holder = Class.forName("androidx.compose.ui.window.WindowExceptionHandlerFactory_desktopKt")
+    // 不写死 getter 名：按「无参、返回 ProvidableCompositionLocal」找，Compose 小版本改名也不坏
+    val getter = holder.declaredMethods.firstOrNull { m ->
+        m.parameterCount == 0 &&
+            m.returnType.name == "androidx.compose.runtime.ProvidableCompositionLocal"
+    } ?: return@runCatching null
+    @Suppress("UNCHECKED_CAST")
+    getter.invoke(null) as androidx.compose.runtime.ProvidableCompositionLocal<Any>
+}.getOrNull()
+
+/**
+ * 用 JDK 动态代理造一个 WindowExceptionHandlerFactory 实例（接口在 Kotlin 侧是 internal）。
+ * Compose 调 `exceptionHandler(window)` 时返回我们传进来的 [handler]，从而不再弹默认错误框。
+ */
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+private fun windowExceptionFactory(
+    handler: androidx.compose.ui.window.WindowExceptionHandler
+): Any? = runCatching {
+    val cls = Class.forName("androidx.compose.ui.window.WindowExceptionHandlerFactory")
+    java.lang.reflect.Proxy.newProxyInstance(cls.classLoader, arrayOf(cls)) { proxy, method, args ->
+        when (method.name) {
+            // ★ 必须正确实现 Object 的三个方法：Compose 会把这个工厂放进 rememberUpdatedState，
+            //   Intrinsics.areEqual 会调 equals() —— 返回 null 直接 NPE，整个窗口组合就挂了
+            //   （表现为「启动后没有主窗口、进程还在」）。
+            "equals" -> proxy === args?.firstOrNull()
+            "hashCode" -> System.identityHashCode(proxy)
+            "toString" -> "YunXWindowExceptionHandlerFactory"
+            "exceptionHandler" -> handler
+            else -> null
+        }
+    }
+}.getOrNull()
 
 /**
  * 从 classpath 读取 icon.png 构建窗口图标（标题栏 / 任务栏）；

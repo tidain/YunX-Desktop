@@ -157,6 +157,7 @@ tasks.register<JavaExec>("testInProcess") {
         "com.yunx.app.data.network.StarSeaApiTest",
         "com.yunx.app.data.download.HlsRequestPolicyTest",
         "com.yunx.app.data.download.HttpRangePolicyTest",
+        "com.yunx.app.data.download.ElasticAllocatorTest",
         "com.yunx.app.data.download.DownloadPathPolicyTest",
         "com.yunx.app.data.download.DownloadGroupingTest",
         "com.yunx.app.data.download.DirectPartManifestTest",

@@ -285,6 +285,48 @@ class DownloadManagerDirectIntegrationTest {
         )
     }
 
+    @Test
+    fun cachedResumePreservesCompletedIslandsAndMergesWithoutDuplicates() = runBlocking {
+        val dao = MemoryDownloadTaskDao()
+        val id = dao.insert(DownloadTaskEntity(
+            url = server.url("/file").toString(),
+            fileName = "resume-cache.bin",
+            totalSize = data.size.toLong(),
+            status = DownloadTaskEntity.STATUS_PAUSED,
+            saveDir = saveDir.absolutePath
+        ))
+        val chunkDir = File(AppContext.downloadTmpDir, "download_tmp/$id").apply { mkdirs() }
+        File(chunkDir, "plan.txt").writeText("chunks=4 total=${data.size} main=2")
+        val chunkSize = data.size / 4
+        for (i in 0 until 2) {
+            File(chunkDir, "part_$i").writeBytes(data.copyOfRange(i * chunkSize, (i + 1) * chunkSize))
+        }
+        val mb = 1024 * 1024
+        val completed = listOf(6 * mb until 7 * mb, 8 * mb until data.size)
+        for (range in completed) {
+            File(chunkDir, "seg_${range.first}_${range.last}.part")
+                .writeBytes(data.copyOfRange(range.first, range.last + 1))
+        }
+        // 模拟较早的块未完成，但后方多个块已完成的暂停状态。
+        File(chunkDir, "seg_${5 * mb}_${6 * mb - 1}.part").writeBytes(ByteArray(100))
+
+        val manager = newManager(dao, threads = 4, single = false, multi = false)
+        manager.start(id)
+        awaitCompleted(dao, id)
+
+        val saved = File(saveDir, "resume-cache.bin")
+        assertEquals(data.size.toLong(), saved.length())
+        assertArrayEquals(data, saved.readBytes())
+        repeat(server.requestCount) {
+            val request = server.takeRequest()
+            val (start, end) = parseRange(request.getHeader("Range")!!)
+            for (range in completed) {
+                assertTrue("不应重新请求已完成区间：$start-$end", end < range.first || start > range.last)
+            }
+        }
+        assertNoCacheChunks(id)
+    }
+
     private fun newManager(
         dao: DownloadTaskDao,
         threads: Int,

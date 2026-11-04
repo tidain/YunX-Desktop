@@ -195,14 +195,17 @@ private data class RetryRange(val start: Long, val end: Long, val file: File)
  * - 尾部收缩：剩余字节 <= workers*块 时，把块压到 remaining/workers，让全部连接并行冲完最后一段，
  *   彻底消除"其他分片下完、只剩最后一个线程慢慢爬"的拖尾塌缩。
  */
-private class ElasticAllocator(
+internal class ElasticAllocator(
     private val total: Long,
     private val elasticStart: Long,
     private val workers: Int,
-    private val chunkSize: Long
+    private val chunkSize: Long,
+    completedRanges: List<LongRange> = emptyList()
 ) {
     private val lock = Any()
     private var nextStart = elasticStart
+    private val completed = completedRanges.sortedBy { it.first }
+    private var completedIndex = 0
 
     /** 最近实测总速度（字节/秒），由外部实时注入；<=0 表示尚未探测到 */
     @Volatile
@@ -210,8 +213,16 @@ private class ElasticAllocator(
 
     /** 领取下一个弹性块（按字节顺序；块大小随速度与剩余量动态收缩） */
     fun take(): LongRange? = synchronized(lock) {
+        // 完整块可能乱序完成；跨过所有已完成区间，而不只是连续前缀。
+        while (completedIndex < completed.size) {
+            val range = completed[completedIndex]
+            if (range.first > nextStart) break
+            nextStart = maxOf(nextStart, range.last + 1)
+            completedIndex++
+        }
         if (nextStart >= total) return null
-        val remaining = total - nextStart
+        val gapEnd = completed.getOrNull(completedIndex)?.first ?: total
+        val remaining = gapEnd - nextStart
         val base = baseBlockSize()
         // ★ 尾部收缩：剩余不足 workers 个整块时，均分到约 workers 份，让全部连接忙到最后；
         //   下限 MIN_TAIL_BLOCK（不碎成海量请求），上限 base（块不会越滚越大）。
@@ -222,7 +233,7 @@ private class ElasticAllocator(
             base
         }
         val s = nextStart
-        val e = minOf(s + block - 1, total - 1)
+        val e = minOf(s + block - 1, gapEnd - 1)
         nextStart = e + 1
         s..e
     }
@@ -233,11 +244,6 @@ private class ElasticAllocator(
         val perWorker = (recentSpeedBps / w).coerceAtLeast(0L)
         if (perWorker <= 0L) return chunkSize.coerceIn(MIN_ELASTIC_BLOCK, MAX_ELASTIC_BLOCK)
         return (perWorker * TARGET_SECONDS).coerceIn(MIN_ELASTIC_BLOCK, MAX_ELASTIC_BLOCK)
-    }
-
-    /** 断点续传：跳过已下载前缀（nextStart 只前进） */
-    fun skipTo(start: Long) = synchronized(lock) {
-        if (start > nextStart) nextStart = start
     }
 
     companion object {
@@ -2053,6 +2059,30 @@ class DownloadManager(
         // 注册实时统计：线程数 = 实际并发（受安全上限与内存预算约束）
         _stats.update { it + (id to DownloadStats(0L, -1L, actualWorkers)) }
 
+        // ★ 弹性区分配器（IDM 式动态分片）：按字节顺序发块、区间物理相邻，替代中点劈分（根治中后段掉速）。
+        //   续传：不完整 seg 删除重下；所有完整 seg 都登记到分配器，补洞时不覆盖已完成区间。
+        //   块大小随实时速度自适应并尾部收缩，保证全部连接忙到最后一块，消除"末尾只剩少数大块 → 拖尾特别慢"。
+        val completedElasticRanges = mutableListOf<LongRange>()
+        if (elasticStart < total) {
+            // 不完整 seg 删除（重下）
+            chunkDir.listFiles { f -> f.name.startsWith("seg_") && f.name.endsWith(".part") }?.forEach { f ->
+                val name = f.name.removePrefix("seg_").removeSuffix(".part")
+                val s = name.substringBefore('_').toLongOrNull() ?: return@forEach
+                val e = name.substringAfter('_').toLongOrNull() ?: return@forEach
+                if (f.length() < (e - s + 1)) f.delete()
+            }
+            // 保留所有完整块，包括空缺后方先完成的块
+            val doneSegs = chunkDir.listFiles { f -> f.name.startsWith("seg_") && f.name.endsWith(".part") }
+                ?.mapNotNull { f ->
+                    val name = f.name.removePrefix("seg_").removeSuffix(".part")
+                    val s = name.substringBefore('_').toLongOrNull() ?: return@mapNotNull null
+                    val e = name.substringAfter('_').toLongOrNull() ?: return@mapNotNull null
+                    if (f.length() >= (e - s + 1)) s to e else null
+                }?.sortedBy { it.first } ?: emptyList()
+            completedElasticRanges += doneSegs.map { (s, e) -> s..e }
+        }
+        val elasticAllocator = ElasticAllocator(total, elasticStart, actualWorkers, chunkSize, completedElasticRanges)
+
         // 统计已有 part/seg 大小（断点续传起点）。
         // ★★ 必须按「当前计划」逐片校验，不能直接按磁盘长度求和：
         //    旧 job 残留的分片可能与当前计划重叠（分片数/片大小改过就必然错位），
@@ -2097,32 +2127,6 @@ class DownloadManager(
         val failReason = java.util.concurrent.atomic.AtomicReference<String?>(null)
         val rangeIgnoredCount = AtomicInteger(0)         // RANGE_IGNORED 累计次数（偶发 200 容忍）
 
-        // ★ 弹性区分配器（IDM 式动态分片）：按字节顺序发块、区间物理相邻，替代中点劈分（根治中后段掉速）。
-        //   续传：不完整 seg 删除重下；完整 seg 前缀推进 nextStart（弹性区按序分配，完成块天然是字节前缀）。
-        //   块大小随实时速度自适应并尾部收缩，保证全部连接忙到最后一块，消除"末尾只剩少数大块 → 拖尾特别慢"。
-        val elasticAllocator = ElasticAllocator(total, elasticStart, actualWorkers, chunkSize)
-        if (elasticStart < total) {
-            // 不完整 seg 删除（重下）
-            chunkDir.listFiles { f -> f.name.startsWith("seg_") && f.name.endsWith(".part") }?.forEach { f ->
-                val name = f.name.removePrefix("seg_").removeSuffix(".part")
-                val s = name.substringBefore('_').toLongOrNull() ?: return@forEach
-                val e = name.substringAfter('_').toLongOrNull() ?: return@forEach
-                if (f.length() < (e - s + 1)) f.delete()
-            }
-            // 推进到已完整前缀末尾（只前进，跳过已下载弹性块）
-            val doneSegs = chunkDir.listFiles { f -> f.name.startsWith("seg_") && f.name.endsWith(".part") }
-                ?.mapNotNull { f ->
-                    val name = f.name.removePrefix("seg_").removeSuffix(".part")
-                    val s = name.substringBefore('_').toLongOrNull() ?: return@mapNotNull null
-                    val e = name.substringAfter('_').toLongOrNull() ?: return@mapNotNull null
-                    if (f.length() >= (e - s + 1)) s to e else null
-                }?.sortedBy { it.first } ?: emptyList()
-            var resumeNext = elasticStart
-            for ((s, e) in doneSegs) {
-                if (s == resumeNext) resumeNext = e + 1 else break
-            }
-            elasticAllocator.skipTo(resumeNext)
-        }
         val elasticResults = ConcurrentHashMap<String, ChunkResult>()
         // 在飞分片表（key = m<片号> / seg@<起点> / retry@<起点>）：仅供看门狗算瞬时速度与抢占判定
         val inflightChunks = ConcurrentHashMap<String, InflightChunk>()

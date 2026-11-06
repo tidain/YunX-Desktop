@@ -12,11 +12,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -47,6 +49,8 @@ fun DownloadLinkDialog(
     saveDir: String? = null,
     /** 提供后弹窗内显示「选择/更改保存目录」入口 */
     onChangeSaveDir: (() -> Unit)? = null,
+    /** 提供后弹窗内显示「发送到 Motrix」入口（把直链连同请求头交给外部下载器） */
+    onSendToMotrix: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     FadeAlertDialog(
@@ -116,6 +120,22 @@ fun DownloadLinkDialog(
                 } else {
                     // 云盘页没有任务级目录入口：提供就地改全局下载目录（与「设置 → 储存目录」同一项配置）
                     DownloadDirRow()
+                }
+                if (onSendToMotrix != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    // 交给外部下载器：直链 + Cookie/Referer/UA 一起推给 Motrix，本程序不再跟踪该任务
+                    OutlinedButton(
+                        onClick = { onSendToMotrix() },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.OpenInNew,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("发送到 Motrix")
+                    }
                 }
             }
         },

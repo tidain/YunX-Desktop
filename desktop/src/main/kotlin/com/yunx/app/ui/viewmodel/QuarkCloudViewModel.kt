@@ -319,6 +319,56 @@ class QuarkCloudViewModel(
         }
     }
 
+    /**
+     * 把整个文件夹发送到 Motrix（外部下载器）：递归展开后逐条投递，保持子目录结构。
+     *
+     * 与 [downloadFolder] 的区别：不入本程序下载队列、不跟踪进度，直链连同 Cookie/Referer/UA 一并交给 Motrix。
+     * @param saveDir 保存目录；空 = 用 Motrix 自己的默认目录
+     */
+    fun sendFolderToMotrix(saveDir: String = "") {
+        val folder = actionFile ?: return
+        if (!folder.isdir) return
+        viewModelScope.launch {
+            isOperating = true
+            folderProgress = "正在收集文件…"
+            downloadCancelRequested = false
+            try {
+                val cookie = cookieProvider()
+                if (cookie.isNullOrBlank()) {
+                    cloudMessage = "请先登录夸克网盘"
+                    return@launch
+                }
+                val tasks = mutableListOf<Pair<ShareFile, String>>()
+                collectFolderFiles(folder.fid, folder.fname, cookie, tasks, 0)
+                if (tasks.isEmpty()) {
+                    cloudMessage = "文件夹为空"
+                    actionFile = null
+                    return@launch
+                }
+                val outcome = sendFilesToMotrix(
+                    tasks = tasks,
+                    saveDir = saveDir,
+                    isCancelled = { downloadCancelRequested },
+                    onProgress = { folderProgress = it },
+                    nameOf = { it.second },
+                    resolve = { (file, _) ->
+                        val link = api.getDownloadLink(file.fid, cookie) ?: return@sendFilesToMotrix null
+                        val effectiveUrl = com.yunx.app.data.network.QuarkCdn.fastest(link.downloadUrl, cookie)
+                        MotrixSource(url = effectiveUrl, headers = downloadHeaders(cookie), fallbackName = link.filename)
+                    }
+                )
+                cloudMessage = outcome.describe(folder.fname)
+                actionFile = null
+            } catch (e: Exception) {
+                cloudMessage = e.message ?: "发送到 Motrix 失败"
+            } finally {
+                isOperating = false
+                folderProgress = null
+                downloadCancelRequested = false
+            }
+        }
+    }
+
     /** 待确认的下载直链（单文件下载弹窗展示用，长按链接可复制） */
     var downloadLink by mutableStateOf<DownloadLink?>(null)
         private set
@@ -404,6 +454,29 @@ class QuarkCloudViewModel(
         downloadLink = null
         pendingDownload = null
         pendingSaveDir = ""
+    }
+
+    /**
+     * 把弹窗里的直链连同 Cookie/Referer/UA 一起发送到 Motrix（外部下载器）。
+     *
+     * 只下发任务，不在本程序入队、不跟踪进度；成功后关闭弹窗。
+     */
+    fun sendToMotrix(saveDir: String = "") {
+        val pd = pendingDownload ?: return
+        viewModelScope.launch {
+            isOperating = true
+            try {
+                val exchange = pd.sendToMotrix(saveDir)
+                cloudMessage = exchange.message
+                if (exchange.success) {
+                    downloadLink = null
+                    pendingDownload = null
+                    pendingSaveDir = ""
+                }
+            } finally {
+                isOperating = false
+            }
+        }
     }
 
     /** 重命名 */
@@ -602,6 +675,62 @@ class QuarkCloudViewModel(
                 // 批量下载不自动切页：保持网盘页显示处理中弹窗（单文件下载才切到下载页）
             } catch (e: Exception) {
                 cloudMessage = e.message ?: "批量下载失败"
+            } finally {
+                isOperating = false
+                folderProgress = null
+                downloadCancelRequested = false
+            }
+        }
+    }
+
+    /**
+     * 把当前多选的文件/文件夹发送到 Motrix（外部下载器）：递归展开后逐条投递，保持子目录结构。
+     *
+     * 与 [downloadSelected] 的区别：不入本程序下载队列、不跟踪进度，直链连同 Cookie/Referer/UA 一并交给 Motrix。
+     * @param saveDir 保存目录；空 = 用 Motrix 自己的默认目录
+     */
+    fun sendSelectedToMotrix(saveDir: String = "") {
+        val files = _selected.toList()
+        if (files.isEmpty()) return
+        viewModelScope.launch {
+            isOperating = true
+            folderProgress = "正在收集文件…"
+            downloadCancelRequested = false
+            try {
+                val cookie = cookieProvider()
+                if (cookie.isNullOrBlank()) {
+                    cloudMessage = "请先登录夸克网盘"
+                    return@launch
+                }
+                val tasks = mutableListOf<Pair<ShareFile, String>>()
+                for (file in files) {
+                    if (file.isdir) {
+                        collectFolderFiles(file.fid, file.fname, cookie, tasks, 0)
+                    } else {
+                        tasks.add(file to file.fname)
+                    }
+                }
+                if (tasks.isEmpty()) {
+                    cloudMessage = "所选文件夹为空"
+                    exitMultiSelect()
+                    return@launch
+                }
+                val outcome = sendFilesToMotrix(
+                    tasks = tasks,
+                    saveDir = saveDir,
+                    isCancelled = { downloadCancelRequested },
+                    onProgress = { folderProgress = it },
+                    nameOf = { it.second },
+                    resolve = { (file, _) ->
+                        val link = api.getDownloadLink(file.fid, cookie) ?: return@sendFilesToMotrix null
+                        val effectiveUrl = com.yunx.app.data.network.QuarkCdn.fastest(link.downloadUrl, cookie)
+                        MotrixSource(url = effectiveUrl, headers = downloadHeaders(cookie), fallbackName = link.filename)
+                    }
+                )
+                cloudMessage = outcome.describe(null)
+                exitMultiSelect()
+            } catch (e: Exception) {
+                cloudMessage = e.message ?: "发送到 Motrix 失败"
             } finally {
                 isOperating = false
                 folderProgress = null

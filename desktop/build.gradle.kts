@@ -200,14 +200,29 @@ fun findMsvcVcvars(): File? {
     return null
 }
 
+// 定位 PATH 里的 g++（MinGW 回退用）；找不到返回 null
+fun findGxx(): File? {
+    val path = System.getenv("PATH") ?: return null
+    val names = listOf("g++.exe", "g++")
+    for (dir in path.split(File.pathSeparatorChar)) {
+        if (dir.isBlank()) continue
+        for (name in names) {
+            val f = File(dir, name)
+            if (f.isFile) return f
+        }
+    }
+    return null
+}
+
 val compileDarkMode by tasks.registering(Exec::class) {
     val vcvars = findMsvcVcvars()
+    val gxx = if (vcvars == null) findGxx() else null
     inputs.file(darkModeSrc)
     outputs.file(darkModeOut)
-    doFirst {
-        nativeOutDir.mkdirs()
-    }
     if (vcvars != null) {
+        doFirst {
+            nativeOutDir.mkdirs()
+        }
         commandLine(
             "cmd", "/c",
             "call \"${vcvars.absolutePath}\" >nul && " +
@@ -216,12 +231,25 @@ val compileDarkMode by tasks.registering(Exec::class) {
                 "/Fo:\"${nativeOutDir.absolutePath}\\\\\" " +
                 "/link /NOENTRY kernel32.lib user32.lib"
         )
-    } else {
+    } else if (gxx != null) {
         // 回退 MinGW
+        doFirst {
+            nativeOutDir.mkdirs()
+        }
         commandLine(
-            "g++", "-shared", "-o", darkModeOut.absolutePath,
+            gxx.absolutePath, "-shared", "-o", darkModeOut.absolutePath,
             darkModeSrc.absolutePath, "-lkernel32", "-luser32"
         )
+    } else {
+        // 机器上没有 C++ 编译器（既无 MSVC 也无 g++）时**跳过**，不让 :desktop:run 跟着失败。
+        // darkmode.dll 只负责托盘原生菜单的深色桥接层；缺失时 util/DarkMode.kt 会捕获加载异常
+        // 并记一条警告，界面与功能完全不受影响（只是托盘菜单不走深色配色）。
+        // 装了 MSVC 或 g++ 之后无需改任何东西，本任务会自动恢复编译。
+        logger.warn(
+            "[darkmode] 未找到 C++ 编译器（MSVC vcvars64.bat / g++），跳过 darkmode.dll 编译；" +
+                "界面不受影响，仅托盘菜单深色模式不可用。"
+        )
+        onlyIf { false }
     }
 }
 

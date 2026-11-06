@@ -29,6 +29,7 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Layers
 import androidx.compose.material.icons.outlined.Minimize
 import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Power
 import androidx.compose.material.icons.outlined.Refresh
@@ -161,6 +162,8 @@ fun SettingsScreen(
     onExperimentalClick: () -> Unit,
     /** 打开「引擎管理」二级页（下载引擎 / 视频预览引擎） */
     onDownloadEngineClick: () -> Unit,
+    /** 打开「Motrix 外部下载器」二级页（RPC 端口 / 密钥 / 自动读取） */
+    onMotrixClick: () -> Unit,
     /** 打开「储存目录」二级页（下载保存目录 / 下载缓存 / 数据库位置） */
     onStorageClick: () -> Unit,
     backupManager: AuthBackupManager,
@@ -452,6 +455,16 @@ fun SettingsScreen(
             title = "引擎管理",
             description = "下载引擎（内置分片下载器 / Gopeed）与视频预览引擎（FFplay / 内置）",
             onClick = onDownloadEngineClick
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Motrix 外部下载器二级页：把直链连同 Cookie/Referer/UA 交给 Motrix（aria2 RPC）
+        SettingsItem(
+            icon = Icons.Outlined.OpenInNew,
+            title = "Motrix 下载器",
+            description = "解析完成后可一键发送到 Motrix（自动读取本机 RPC 端口与密钥）",
+            onClick = onMotrixClick
         )
 
         Spacer(modifier = Modifier.height(8.dp))

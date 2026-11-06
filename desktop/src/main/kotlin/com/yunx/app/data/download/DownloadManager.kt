@@ -1737,6 +1737,16 @@ class DownloadManager(
         }
     }
 
+    /**
+     * 取某任务的请求头（Cookie / Referer / UA），供**外部投递**使用（「发送到 Motrix」）。
+     *
+     * 这里必须开一个公开入口：库里 `requestHeadersJson` 是加密的，只有 DownloadManager
+     * 手里的 [credentialCipher] 能解开；界面层拿不到，也不该自己解。
+     * 优先内存（本次运行入队的任务），没有则解密库里的（上次运行留下的任务）。
+     */
+    suspend fun headersFor(id: Long): Map<String, String> =
+        taskHeaders[id] ?: loadPersistedHeaders(id)
+
     /** 当前协程是否仍活跃（暂停/删除触发取消后为 false） */
     private suspend fun isTaskActive(): Boolean = coroutineContext[Job]?.isActive == true
 

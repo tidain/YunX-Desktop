@@ -2,6 +2,8 @@ package com.yunx.app.data.prefs
 
 import com.yunx.app.AppContext
 import com.yunx.app.data.download.DownloadPlatform
+import com.yunx.app.data.motrix.MotrixConfig
+import com.yunx.app.data.motrix.MotrixLocator
 import java.util.prefs.Preferences
 
 /**
@@ -472,6 +474,97 @@ class SettingsRepository {
             v.startsWith("https://") || v.startsWith("ws://") || v.startsWith("wss://")
     }
 
+    // ---------- Motrix（外部下载器） ----------
+
+    /**
+     * 是否显示「发送到 Motrix」入口（默认开）。
+     *
+     * 这只是一个总开关：真正决定入口出不出现的是能不能读到 Motrix 的 RPC 参数
+     * （见 [resolveMotrixConfig]）。没装 Motrix 的机器上即使开着也不会看到按钮。
+     */
+    var motrixEnabled: Boolean
+        get() = prefs.getBoolean("motrix_enabled", true)
+        set(value) {
+            prefs.putBoolean("motrix_enabled", value)
+        }
+
+    /**
+     * 是否自动读取 Motrix 的配置文件取端口与 RPC 密钥（默认开）。
+     *
+     * 会依次尝试 `settings.json`（Motrix 2.x）与 `system.json`（Motrix 1.x），
+     * 并在文件被改写后自动重新读盘 —— 在 Motrix 里改了端口/密钥不必重启本程序。
+     *
+     * 关掉后改用下面手填的 [motrixPort] / [motrixSecret]，供 Motrix 便携版、
+     * 改过 APPDATA、或跑在另一台机器上的用户使用。
+     */
+    var motrixAutoDetect: Boolean
+        get() = prefs.getBoolean("motrix_auto_detect", true)
+        set(value) {
+            prefs.putBoolean("motrix_auto_detect", value)
+        }
+
+    /** 手动指定的 RPC 端口（[motrixAutoDetect] 关闭时生效；自动读取失败时也会兜底用它） */
+    var motrixPort: Int
+        get() = prefs.getInt("motrix_port", MOTRIX_DEFAULT_PORT).coerceIn(1, 65535)
+        set(value) {
+            prefs.putInt("motrix_port", value.coerceIn(1, 65535))
+        }
+
+    /** 手动指定的 RPC 密钥（[motrixAutoDetect] 关闭时生效；空串 = Motrix 未设密钥） */
+    var motrixSecret: String
+        get() = prefs.get("motrix_secret", "")
+        set(value) {
+            val v = value.trim()
+            if (v.isEmpty()) prefs.remove("motrix_secret") else prefs.put("motrix_secret", v)
+        }
+
+    /**
+     * 发送到 Motrix 之前是否先弹目录选择框（默认关）。
+     *
+     * 关掉 = 直接投递，文件落到 Motrix 自己的默认下载目录（原行为）；
+     * 打开 = 每次发送前先选一次目录，选中的路径作为 aria2 的 `dir` 下发给 Motrix，
+     * 只影响这一次发送，不改 Motrix 的全局设置。
+     *
+     * 为什么放在本程序里选、而不是让 Motrix 自己弹窗：Motrix 的「新建任务」窗口
+     * 没有自定义请求头字段，走那条路会丢掉 Cookie / Referer / UA，网盘直链会被 412/403。
+     */
+    var motrixAskSaveDir: Boolean
+        get() = prefs.getBoolean("motrix_ask_save_dir", false)
+        set(value) {
+            prefs.putBoolean("motrix_ask_save_dir", value)
+        }
+
+    /**
+     * 是否已经手动填过连接参数。
+     *
+     * 用来判断「自动读取失败时该不该退到手动配置」：端口改过或密钥非空才算填过，
+     * 避免没装 Motrix 的机器上凭空冒出一个连不上 16800 的入口。
+     */
+    fun hasManualMotrixConfig(): Boolean =
+        motrixSecret.isNotBlank() || prefs.get("motrix_port", null) != null
+
+    /** 手动填写的那套参数（不管自动读取开关） */
+    fun manualMotrixConfig(): MotrixConfig = MotrixConfig(
+        port = motrixPort,
+        secret = motrixSecret,
+        defaultDir = "",
+        source = "手动设置 127.0.0.1:$motrixPort"
+    )
+
+    /**
+     * 实际使用的 Motrix 连接参数。
+     *
+     * - 返回 null：功能被关掉，或者既读不到 Motrix 配置、也没手动填过（→ 界面不显示入口）；
+     * - 自动读取开着且读到了：用配置文件里的端口/密钥/下载目录；
+     * - 自动读取关掉：用手填端口/密钥（Motrix 便携版、改过 APPDATA 时用）；
+     * - 自动读取开着但没读到：手填过就用手填的，否则返回 null。
+     */
+    fun resolveMotrixConfig(): MotrixConfig? {
+        if (!motrixEnabled) return null
+        if (!motrixAutoDetect) return manualMotrixConfig()
+        return MotrixLocator.detect() ?: manualMotrixConfig().takeIf { hasManualMotrixConfig() }
+    }
+
     /**
      * 多账号下载（**实验性**，代号 C1）：默认关。
      *
@@ -646,6 +739,9 @@ class SettingsRepository {
         const val DEFAULT_MAX_CONCURRENT_DOWNLOADS = 3
         const val DEFAULT_DOWNLOAD_RETRY_COUNT = 3
         const val DEFAULT_PROXY_PORT = 7890
+
+        /** Motrix RPC 默认端口（与 Motrix 内置的 aria2 默认值一致） */
+        const val MOTRIX_DEFAULT_PORT = 16800
 
         /** HTTP/2 默认关闭（与现状一致：仅使用 HTTP/1.1） */
         const val DEFAULT_HTTP2_ENABLED = false

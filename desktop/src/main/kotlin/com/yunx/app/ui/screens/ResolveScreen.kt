@@ -451,7 +451,8 @@ fun ResolveScreen(
             onDownload = { viewModel.startDownload(link) },
             onDismiss = { viewModel.dismissDownloadDialog() },
             saveDir = viewModel.pendingSaveDir.takeIf { it.isNotBlank() },
-            onChangeSaveDir = { pickDownloadDir { viewModel.chooseDownloadDir(it) } }
+            onChangeSaveDir = { pickDownloadDir { viewModel.chooseDownloadDir(it) } },
+            onSendToMotrix = { viewModel.sendDownloadToMotrix(link) }
         )
     }
 

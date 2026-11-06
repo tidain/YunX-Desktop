@@ -17,6 +17,7 @@ import com.yunx.app.data.db.LinkHistoryEntity
 import com.yunx.app.data.download.DownloadManager
 import com.yunx.app.data.download.DownloadPlatform
 import com.yunx.app.data.download.DownloadSource
+import com.yunx.app.data.motrix.MotrixSender
 import com.yunx.app.data.network.BaiduConstants
 import com.yunx.app.data.network.C139Constants
 import com.yunx.app.data.network.GitHubApi
@@ -1872,6 +1873,67 @@ class ResolveViewModel(
         /** 任务级保存目录（空串 = 跟随全局设置） */
         saveDir: String = ""
     ) {
+        // 真正要请求的地址 + 请求头（含 CDN 优选与凭证刷新），与「发送到 Motrix」共用同一份
+        val request = buildDownloadRequest(link, credential)
+        // 入队前先记住「哪个平台的仓库 + 哪份凭证」：下载完成时用户可能已经切到别的分享页
+        val cleanupRepo = currentRepo()
+        val cleanupCredential = credential
+        val isQuark = currentPlatform == SharePlatform.QUARK
+        // 单文件多源分片（实验性 C2）：备选源 = 其他账号的直链 + 「主源那一套请求头、只换 Cookie」。
+        // ★ 当前支持的平台（夸克 / UC / 迅雷 / 百度）下载请求头差异都只有 Cookie 一项
+        //   （迅雷直链头里根本没有 Cookie，直链自带签名），所以这里沿用主源头再换 Cookie 即可；
+        //   将来若给 115（双 Cookie）之类开多源，必须重新评估这一处。
+        val altSources = altLinks.map { (altLink, altCred) ->
+            val url = if (isQuark) {
+                // 夸克每条备选直链同样做一次 CDN 节点优选（原样直链容易 412）
+                QuarkCdn.fastest(altLink.downloadUrl, altCred)
+            } else {
+                altLink.downloadUrl
+            }
+            val headersForAlt = if (request.headers.containsKey("Cookie")) {
+                request.headers + ("Cookie" to altCred)
+            } else {
+                request.headers
+            }
+            DownloadSource(url, headersForAlt)
+        }
+        downloadManager.enqueue(
+            url = request.url,
+            fileName = fileName,
+            headers = request.headers,
+            size = link.size,
+            platform = request.platform,
+            altSources = altSources,
+            saveDir = saveDir
+        ) {
+            // 下载完成（通过 onComplete 回调）：清理网盘临时转存目录；失败/取消不触发
+            val dirFid = link.cleanupDirFid
+            if (dirFid != null && cleanupCredential.isNotBlank()) {
+                cleanupRepo.cleanupTempDir(dirFid, cleanupCredential)
+            }
+        }
+    }
+
+    /**
+     * 一条直链真正要发出去的请求：地址 + 请求头 + 平台标识。
+     * 抽成独立类型是因为「发送到 Motrix」要复用完全相同的这一份数据。
+     */
+    private data class DownloadRequest(
+        val url: String,
+        val headers: Map<String, String>,
+        val platform: String
+    )
+
+    /**
+     * 按当前平台算出直链的实际请求地址与请求头（含夸克/UC 凭证刷新、夸克 CDN 优选）。
+     *
+     * 内置下载器与「发送到 Motrix」都走这里：这些请求头少一项（Cookie / Referer / UA）
+     * CDN 就会 412/403，两处各写一份迟早会漂移。
+     */
+    private suspend fun buildDownloadRequest(
+        link: DownloadLink,
+        credential: String
+    ): DownloadRequest {
         val isUC = currentPlatform == SharePlatform.UC
         val isXunlei = currentPlatform == SharePlatform.XUNLEI
         val isBaidu = currentPlatform == SharePlatform.BAIDU
@@ -1986,40 +2048,35 @@ class ResolveViewModel(
         } else {
             link.downloadUrl
         }
-        // 入队前先记住「哪个平台的仓库 + 哪份凭证」：下载完成时用户可能已经切到别的分享页
-        val cleanupRepo = currentRepo()
-        val cleanupCredential = credential
-        // 单文件多源分片（实验性 C2）：备选源 = 其他账号的直链 + 「主源那一套请求头、只换 Cookie」。
-        // ★ 当前支持的平台（夸克 / UC / 迅雷 / 百度）下载请求头差异都只有 Cookie 一项
-        //   （迅雷直链头里根本没有 Cookie，直链自带签名），所以这里沿用主源头再换 Cookie 即可；
-        //   将来若给 115（双 Cookie）之类开多源，必须重新评估这一处。
-        val altSources = altLinks.map { (altLink, altCred) ->
-            val url = if (isQuark) {
-                // 夸克每条备选直链同样做一次 CDN 节点优选（原样直链容易 412）
-                QuarkCdn.fastest(altLink.downloadUrl, altCred)
-            } else {
-                altLink.downloadUrl
+        return DownloadRequest(url = effectiveUrl, headers = headers, platform = platform)
+    }
+
+    /**
+     * 下载弹窗里的「发送到 Motrix」：把这条直链连同已算好的请求头交给本机 Motrix。
+     *
+     * 与 [startDownload] 的区别：不加入 YunX 的下载队列、不跟踪进度、不触发切到下载页；
+     * 成功/失败都用提示条告知。弹窗保持打开，用户还可以再点「开始下载」走内置下载器。
+     */
+    fun sendDownloadToMotrix(link: DownloadLink) {
+        viewModelScope.launch {
+            val credential = currentCredential().orEmpty()
+            // 游客直链（夸克/UC 小文件）自带游客 Cookie，未登录也能下
+            if (credential.isBlank() && !supportsGuestDownload() && link.guestCookie.isBlank()) {
+                SnackbarController.show("发送需要先登录${platformName()}（未登录仅能浏览文件列表）")
+                return@launch
             }
-            val headersForAlt = if (headers.containsKey("Cookie")) {
-                headers + ("Cookie" to altCred)
-            } else {
-                headers
-            }
-            DownloadSource(url, headersForAlt)
-        }
-        downloadManager.enqueue(
-            url = effectiveUrl,
-            fileName = fileName,
-            headers = headers,
-            size = link.size,
-            platform = platform,
-            altSources = altSources,
-            saveDir = saveDir
-        ) {
-            // 下载完成（通过 onComplete 回调）：清理网盘临时转存目录；失败/取消不触发
-            val dirFid = link.cleanupDirFid
-            if (dirFid != null && cleanupCredential.isNotBlank()) {
-                cleanupRepo.cleanupTempDir(dirFid, cleanupCredential)
+            try {
+                val request = buildDownloadRequest(link, credential)
+                val result = MotrixSender.send(
+                    url = request.url,
+                    fileName = link.filename,
+                    headers = request.headers,
+                    saveDir = pendingSaveDir
+                )
+                SnackbarController.show(MotrixSender.describe(result, link.filename))
+            } catch (e: Exception) {
+                Log.e("ResolveVM", "sendDownloadToMotrix failed: ${e.javaClass.simpleName}: ${e.message}", e)
+                SnackbarController.show("发送到 Motrix 失败：${e.message ?: e.javaClass.simpleName}")
             }
         }
     }

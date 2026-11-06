@@ -1,5 +1,6 @@
 package com.yunx.app.ui.screens
 
+import com.yunx.app.data.prefs.SettingsRepository
 import com.yunx.app.ui.theme.Motion
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.clickable
@@ -26,6 +27,7 @@ import androidx.compose.material.icons.outlined.DriveFileMove
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.FolderOpen
+import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -101,6 +103,7 @@ fun FileActionSheet(
     val moveState by viewModel.moveUiState.collectAsState()
     val operating = viewModel.isOperating
     val scope = rememberCoroutineScope()
+    val settings = remember { SettingsRepository() }
 
     /** 选择本次下载的保存目录（原生目录选择器）；取消则不改动 */
     fun pickDownloadDir(onPicked: (String) -> Unit) {
@@ -111,6 +114,11 @@ fun FileActionSheet(
                 onDismiss()
             }
         }
+    }
+
+    /** 发送到 Motrix；设置里开了「发送前询问保存目录」就先选目录 */
+    fun sendToMotrix(action: (String) -> Unit) {
+        if (settings.motrixAskSaveDir) pickDownloadDir { dir -> action(dir) } else action("")
     }
 
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -138,6 +146,10 @@ fun FileActionSheet(
                 },
                 onDownloadFolderTo = {
                     pickDownloadDir { viewModel.downloadFolder(it) }
+                },
+                onSendFolderToMotrix = {
+                    sendToMotrix { dir -> viewModel.sendFolderToMotrix(dir) }
+                    onDismiss()
                 },
                 onShare = { step = ActionStep.SHARE },
                 onMove = {
@@ -205,6 +217,7 @@ private fun ActionMenu(
     onDownloadTo: () -> Unit,
     onDownloadFolder: (() -> Unit)? = null,
     onDownloadFolderTo: (() -> Unit)? = null,
+    onSendFolderToMotrix: (() -> Unit)? = null,
     onShare: () -> Unit,
     onMove: () -> Unit,
     onRename: () -> Unit,
@@ -284,6 +297,15 @@ private fun ActionMenu(
                     desc = "选择本次保存的文件夹（不改全局设置）",
                     tint = MaterialTheme.colorScheme.primary,
                     onClick = onDownloadFolderTo
+                )
+            }
+            if (onSendFolderToMotrix != null) {
+                ActionItem(
+                    icon = Icons.Outlined.OpenInNew,
+                    title = "发送到 Motrix",
+                    desc = "整个文件夹逐条投递给 Motrix（保持子目录结构）",
+                    tint = MaterialTheme.colorScheme.primary,
+                    onClick = onSendFolderToMotrix
                 )
             }
         }

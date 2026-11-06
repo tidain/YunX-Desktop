@@ -46,9 +46,16 @@ $buildOut = Invoke-Gradle ":desktop:jar" ":desktop:compileDarkMode" ":desktop:ex
 Write-Host $buildOut
 if ($buildOut -match "BUILD FAILED|FAILURE:") { throw "gradle export failed" }
 
-# 暗色桥接 DLL（由 :desktop:compileDarkMode 用 MSVC 编译，需要 cl；缺失则中止）
+# 暗色桥接 DLL（由 :desktop:compileDarkMode 用 MSVC 的 cl 或 g++ 编译）。
+# 机器上没有 C++ 编译器时该 Gradle 任务会 SKIPPED、产物不存在；它只影响托盘原生菜单的
+# 深色配色，不影响启动与界面，因此这里降级为警告，不再中止打包。
 $darkModeDll = Join-Path $root "desktop\build\native\darkmode.dll"
-if (-not (Test-Path $darkModeDll)) { throw "darkmode.dll not found: $darkModeDll" }
+$hasDarkMode = Test-Path $darkModeDll
+if ($hasDarkMode) {
+    Write-Host "[OK] darkmode.dll found: $darkModeDll" -ForegroundColor Green
+} else {
+    Write-Host "[WARN] darkmode.dll not found (no C++ compiler found). Tray menu keeps light colors; packaging continues." -ForegroundColor Yellow
+}
 
 Write-Host ""
 Write-Host "[2/5] Assembling portable-libs folder..." -ForegroundColor Cyan
@@ -317,7 +324,7 @@ foreach ($entry in $zip.Entries) {
 $zip.Dispose()
 # 暗色桥接 DLL 与 skiko 原生库同放 app\：启动器已把 app\ 加进 java.library.path，
 # 应用的 System.loadLibrary("darkmode") 才能找到它
-Copy-Item $darkModeDll $appDir -Force
+if ($hasDarkMode) { Copy-Item $darkModeDll $appDir -Force }
 $nativeCount = (Get-ChildItem $appDir -File -Filter "*.dll").Count
 Write-Host "Copied native DLLs: $nativeCount" -ForegroundColor Green
 

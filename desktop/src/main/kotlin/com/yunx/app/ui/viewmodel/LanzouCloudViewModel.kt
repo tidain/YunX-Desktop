@@ -323,6 +323,52 @@ class LanzouCloudViewModel(
         }
     }
 
+    /**
+     * 把整个文件夹发送到 Motrix（外部下载器）：递归展开后逐条投递，保持子目录结构。
+     *
+     * 与 [downloadFolder] 的区别：不入本程序下载队列、不跟踪进度，直链连同 Cookie/Referer/UA 一并交给 Motrix。
+     * @param saveDir 保存目录；空 = 用 Motrix 自己的默认目录
+     */
+    fun sendFolderToMotrix(saveDir: String = "") {
+        val folder = actionFile ?: return
+        if (!folder.isdir) return
+        viewModelScope.launch {
+            isOperating = true
+            folderProgress = "正在收集文件…"
+            downloadCancelRequested = false
+            try {
+                val cred = creds()
+                val tasks = mutableListOf<Triple<ShareFile, String, ShareInfo>>()
+                downloadFolderFiles(cred, folder, folder.fname, tasks, 0)
+                if (tasks.isEmpty()) {
+                    cloudMessage = "文件夹为空"
+                    actionFile = null
+                    return@launch
+                }
+                val outcome = sendFilesToMotrix(
+                    tasks = tasks,
+                    saveDir = saveDir,
+                    isCancelled = { downloadCancelRequested },
+                    onProgress = { folderProgress = it },
+                    nameOf = { it.second },
+                    resolve = { (file, _, info) ->
+                        val page = api.resolveShare(info.shareUrl, info.passcode)
+                        val link = api.getShareDownloadLink(page, file, info.passcode.takeIf { it.isNotBlank() })
+                        MotrixSource(url = link.downloadUrl, headers = downloadHeaders(link.downloadUrl), fallbackName = link.filename)
+                    }
+                )
+                cloudMessage = outcome.describe(folder.fname)
+                actionFile = null
+            } catch (e: Exception) {
+                cloudMessage = e.message ?: "发送到 Motrix 失败"
+            } finally {
+                isOperating = false
+                folderProgress = null
+                downloadCancelRequested = false
+            }
+        }
+    }
+
     /** 下载文件：取直链 → 弹下载确认弹窗（确认后入队） */
     fun downloadFile() = beginDownload("")
 
@@ -385,6 +431,29 @@ class LanzouCloudViewModel(
         downloadLink = null
         pendingDownload = null
         pendingSaveDir = ""
+    }
+
+    /**
+     * 把弹窗里的直链连同 Cookie/Referer/UA 一起发送到 Motrix（外部下载器）。
+     *
+     * 只下发任务，不在本程序入队、不跟踪进度；成功后关闭弹窗。
+     */
+    fun sendToMotrix(saveDir: String = "") {
+        val pd = pendingDownload ?: return
+        viewModelScope.launch {
+            isOperating = true
+            try {
+                val exchange = pd.sendToMotrix(saveDir)
+                cloudMessage = exchange.message
+                if (exchange.success) {
+                    downloadLink = null
+                    pendingDownload = null
+                    pendingSaveDir = ""
+                }
+            } finally {
+                isOperating = false
+            }
+        }
     }
 
     // ---------- 单文件操作 ----------
@@ -555,6 +624,64 @@ class LanzouCloudViewModel(
                 exitMultiSelect()
             } catch (e: Exception) {
                 cloudMessage = e.message ?: "批量下载失败"
+            } finally {
+                isOperating = false
+                folderProgress = null
+                downloadCancelRequested = false
+            }
+        }
+    }
+
+    /**
+     * 把当前多选的文件/文件夹发送到 Motrix（外部下载器）：递归展开后逐条投递，保持子目录结构。
+     *
+     * 与 [downloadSelected] 的区别：不入本程序下载队列、不跟踪进度，直链连同 Cookie/Referer/UA 一并交给 Motrix。
+     * @param saveDir 保存目录；空 = 用 Motrix 自己的默认目录
+     */
+    fun sendSelectedToMotrix(saveDir: String = "") {
+        val files = _selected.toList()
+        if (files.isEmpty()) return
+        viewModelScope.launch {
+            isOperating = true
+            folderProgress = "正在收集文件…"
+            downloadCancelRequested = false
+            try {
+                val cred = creds()
+                val tasks = mutableListOf<Triple<ShareFile, String, ShareInfo?>>()
+                for (file in files) {
+                    if (file.isdir) {
+                        val folderTasks = mutableListOf<Triple<ShareFile, String, ShareInfo>>()
+                        downloadFolderFiles(cred, file, file.fname, folderTasks, 0)
+                        folderTasks.forEach { tasks.add(Triple(it.first, it.second, it.third)) }
+                    } else {
+                        tasks.add(Triple(file, file.fname, null))
+                    }
+                }
+                if (tasks.isEmpty()) {
+                    cloudMessage = "所选文件夹为空"
+                    exitMultiSelect()
+                    return@launch
+                }
+                val outcome = sendFilesToMotrix(
+                    tasks = tasks,
+                    saveDir = saveDir,
+                    isCancelled = { downloadCancelRequested },
+                    onProgress = { folderProgress = it },
+                    nameOf = { it.second },
+                    resolve = { (file, _, info) ->
+                        val link = if (info == null) {
+                            api.getPersonalDownloadLink(cred.cookie, cred.uid, cred.vei, fileNumeric(file.fid), file.fname)
+                        } else {
+                            val page = api.resolveShare(info.shareUrl, info.passcode)
+                            api.getShareDownloadLink(page, file, info.passcode.takeIf { it.isNotBlank() })
+                        }
+                        MotrixSource(url = link.downloadUrl, headers = downloadHeaders(link.downloadUrl), fallbackName = link.filename)
+                    }
+                )
+                cloudMessage = outcome.describe(null)
+                exitMultiSelect()
+            } catch (e: Exception) {
+                cloudMessage = e.message ?: "发送到 Motrix 失败"
             } finally {
                 isOperating = false
                 folderProgress = null

@@ -153,6 +153,7 @@ import com.yunx.app.ui.screens.DownloadScreen
 import com.yunx.app.ui.screens.DownloadEngineScreen
 import com.yunx.app.ui.screens.DriveScreen
 import com.yunx.app.ui.screens.ExperimentalFeaturesScreen
+import com.yunx.app.ui.screens.MotrixSettingsScreen
 import com.yunx.app.ui.screens.StorageDirectoryScreen
 import com.yunx.app.ui.screens.OnboardingScreen
 import com.yunx.app.ui.screens.ResolveScreen
@@ -239,6 +240,7 @@ fun MainScreen(
     var showBookmarks by rememberSaveable { mutableStateOf(false) }
     var showExperimental by rememberSaveable { mutableStateOf(false) }
     var showDownloadEngine by rememberSaveable { mutableStateOf(false) }
+    var showMotrix by rememberSaveable { mutableStateOf(false) }
     var showStorage by rememberSaveable { mutableStateOf(false) }
     var showAnnouncements by rememberSaveable { mutableStateOf(false) }
     /** 启动公告弹窗点「查看详情」时带进去的公告 id（null = 从图标进来先看列表） */
@@ -1078,6 +1080,7 @@ fun MainScreen(
                             onSupportClick = { showSupport = true },
                             onExperimentalClick = { showExperimental = true },
                             onDownloadEngineClick = { showDownloadEngine = true },
+                            onMotrixClick = { showMotrix = true },
                             onStorageClick = { showStorage = true },
                             backupManager = backupManager,
                             onDownloadUpdateApk = { url, name, fallbackUrl ->
@@ -1216,6 +1219,16 @@ fun MainScreen(
             modifier = Modifier.fillMaxSize()
         ) {
             DownloadEngineScreen(onBack = { showDownloadEngine = false })
+        }
+
+        // Motrix 外部下载器：叠加覆盖层（二级页，从设置页进入）
+        AnimatedVisibility(
+            visible = showMotrix,
+            enter = fadeIn(tween(220)) + scaleIn(tween(220), initialScale = 0.96f),
+            exit = fadeOut(tween(160)) + scaleOut(tween(160), targetScale = 0.96f),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            MotrixSettingsScreen(onBack = { showMotrix = false })
         }
 
         // 储存目录：叠加覆盖层（二级页，从设置页进入）

@@ -145,6 +145,14 @@ fun DownloadScreen(
     }
     val openDebug: ((DownloadTaskEntity) -> Unit)? =
         if (downloadDebug) ({ task -> debugTaskId = task.id }) else null
+    // 「发送到 Motrix」入口：Motrix 可用（设置里开着且有配置）时才显示，见设置 → Motrix
+    val sendToMotrix: ((DownloadTaskEntity) -> Unit)? =
+        if (viewModel.motrixAvailable()) ({ task -> viewModel.sendTaskToMotrix(task) }) else null
+    // 文件夹组（一级目录）的「发送到 Motrix」：整组逐条投递，保留子目录层级
+    val sendGroupToMotrix: ((List<DownloadTaskEntity>, String) -> Unit)? =
+        if (viewModel.motrixAvailable()) ({ groupTasks, root ->
+            viewModel.sendGroupToMotrix(groupTasks, root)
+        }) else null
 
     Box(modifier = modifier.fillMaxSize()) {
         // 空状态 ↔ 任务列表之间做淡入淡出：此前是硬切，第一条任务入队 / 删完最后一条时画面会「跳」一下。
@@ -214,6 +222,7 @@ fun DownloadScreen(
                                 onResume = { viewModel.resume(task.id) },
                                 onRemove = { pendingDelete = task },
                                 onRedownload = { viewModel.redownload(task) },
+                                onSendToMotrix = sendToMotrix?.let { cb -> { cb(task) } },
                                 onDebug = openDebug?.let { cb -> { cb(task) } }
                             )
                         }
@@ -232,6 +241,10 @@ fun DownloadScreen(
                                     onResume = { viewModel.resume(it) },
                                     onRemove = { pendingDelete = it },
                                     onRedownload = { viewModel.redownload(it) },
+                                    onSendToMotrix = sendToMotrix,
+                                    onSendGroupToMotrix = sendGroupToMotrix?.let { cb ->
+                                        { cb(groupTasks, saveRoot) }
+                                    },
                                     onDebug = openDebug
                                 )
                             }
@@ -568,12 +581,17 @@ private fun FolderDownloadGroup(
     onResume: (Long) -> Unit,
     onRemove: (DownloadTaskEntity) -> Unit,
     onRedownload: (DownloadTaskEntity) -> Unit,
+    onSendToMotrix: ((DownloadTaskEntity) -> Unit)? = null,
+    /** 文件夹组级别的「发送到 Motrix」：整组逐条投递并保持子目录结构 */
+    onSendGroupToMotrix: (() -> Unit)? = null,
     onDebug: ((DownloadTaskEntity) -> Unit)? = null
 ) {
     // ★ 用 rememberSaveable（而非 remember）：切到别的 Tab 再切回来时，
     //   下载页组合会被重建，remember 会让折叠状态复位成「展开」。
     // ★ 折叠状态按「保存根目录 + 文件夹名」分别保存：同名文件夹下载到不同位置时互不影响
     var expanded by rememberSaveable(folder, saveRoot) { mutableStateOf(true) }
+    // 组级右键菜单（发送到 Motrix：整组投递）
+    var showGroupMenu by remember { mutableStateOf(false) }
     val completed = tasks.count { it.status == DownloadTaskEntity.STATUS_COMPLETED }
     val totalSize = tasks.sumOf { it.totalSize }
     // 聚合显示钳制：任何单项竞态残留都不会让"已下载 > 总大小"
@@ -596,6 +614,7 @@ private fun FolderDownloadGroup(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable { expanded = !expanded }
+                    .onRightClick { showGroupMenu = true }
                     .padding(start = 14.dp, end = 10.dp, top = 12.dp, bottom = 10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -672,6 +691,15 @@ private fun FolderDownloadGroup(
                 )
             }
 
+            // 组级右键菜单（右键卡片头部弹出；与单任务菜单分开，文件夹组没有单一直链）
+            FolderGroupContextMenu(
+                visible = showGroupMenu,
+                folder = folder,
+                fileCount = tasks.size,
+                onDismiss = { showGroupMenu = false },
+                onSendToMotrix = onSendGroupToMotrix
+            )
+
             // 展开区：总体进度条 + 子任务紧凑列表
             AnimatedVisibility(
                 visible = expanded,
@@ -706,6 +734,7 @@ private fun FolderDownloadGroup(
                                 onResume = { onResume(task.id) },
                                 onRemove = { onRemove(task) },
                                 onRedownload = { onRedownload(task) },
+                                onSendToMotrix = onSendToMotrix?.let { cb -> { cb(task) } },
                                 onDebug = onDebug?.let { cb -> { cb(task) } }
                             )
                         }
@@ -714,6 +743,47 @@ private fun FolderDownloadGroup(
             }
         }
     }
+}
+
+/**
+ * 文件夹组（一级目录）右键菜单：整组投递到 Motrix。
+ * 与单任务菜单分开：文件夹组没有单一直链/分享链接，动作是「整组逐条发送」。
+ */
+@Composable
+private fun FolderGroupContextMenu(
+    visible: Boolean,
+    folder: String,
+    fileCount: Int,
+    onDismiss: () -> Unit,
+    onSendToMotrix: (() -> Unit)?
+) {
+    FadeAlertDialog(
+        visible = visible,
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = folder,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                if (onSendToMotrix != null) {
+                    ContextMenuRow(
+                        icon = Icons.Outlined.OpenInNew,
+                        label = "发送到 Motrix（$fileCount 个文件）"
+                    ) {
+                        onDismiss(); onSendToMotrix()
+                    }
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        }
+    )
 }
 
 /**
@@ -728,6 +798,7 @@ private fun DownloadSubTaskRow(
     onResume: () -> Unit,
     onRemove: () -> Unit,
     onRedownload: () -> Unit,
+    onSendToMotrix: (() -> Unit)? = null,
     onDebug: (() -> Unit)? = null
 ) {
     val isDownloading = task.status == DownloadTaskEntity.STATUS_DOWNLOADING ||
@@ -888,6 +959,7 @@ private fun DownloadSubTaskRow(
             onDismiss = { showMenu = false },
             onRedownload = onRedownload,
             onRemove = onRemove,
+            onSendToMotrix = onSendToMotrix,
             onDebug = onDebug
         )
     }
@@ -902,6 +974,8 @@ private fun DownloadTaskCard(
     onResume: () -> Unit,
     onRemove: () -> Unit,
     onRedownload: () -> Unit,
+    /** 「发送到 Motrix」入口：Motrix 可用时非 null（见设置 → Motrix） */
+    onSendToMotrix: (() -> Unit)? = null,
     /** 「下载调试」开着时由外层传入「打开调试信息页」；关闭时为 null（右键菜单不显示该入口） */
     onDebug: (() -> Unit)? = null
 ) {
@@ -1086,6 +1160,7 @@ private fun DownloadTaskCard(
             onDismiss = { showMenu = false },
             onRedownload = onRedownload,
             onRemove = onRemove,
+            onSendToMotrix = onSendToMotrix,
             onDebug = onDebug
         )
     }
@@ -1298,7 +1373,7 @@ private fun AddDownloadDialog(
 
 /**
  * 任务右键菜单（统一弹窗材质）：
- * 复制分享链接 / 复制直链 / 重新下载 / 删除任务。
+ * 复制分享链接 / 复制直链 / 发送到 Motrix / 重新下载 / 删除任务。
  * 替代原先的 AlertDialog，遵循主仓库 FadeAlertDialog 弹窗规范
  * （在窗口内以 OverlayDialogHost 渲染，不创建原生窗口、不阻塞 UI 线程）。
  */
@@ -1311,6 +1386,8 @@ private fun TaskContextMenu(
     onDismiss: () -> Unit,
     onRedownload: () -> Unit,
     onRemove: () -> Unit,
+    /** 「发送到 Motrix」入口：Motrix 可用时非 null（见设置 → Motrix） */
+    onSendToMotrix: (() -> Unit)? = null,
     /** 「调试信息」入口：仅「下载调试」开关打开时非 null（见设置 → 开发调试） */
     onDebug: (() -> Unit)? = null
 ) {
@@ -1340,6 +1417,11 @@ private fun TaskContextMenu(
                     onDismiss()
                     DesktopActions.copyToClipboard(directUrl)
                     SnackbarController.show("直链已复制")
+                }
+                if (onSendToMotrix != null) {
+                    ContextMenuRow(icon = Icons.Outlined.OpenInNew, label = "发送到 Motrix") {
+                        onDismiss(); onSendToMotrix()
+                    }
                 }
                 if (onDebug != null) {
                     ContextMenuRow(icon = Icons.Outlined.BugReport, label = "调试信息") {

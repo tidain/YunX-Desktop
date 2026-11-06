@@ -9,6 +9,8 @@ import com.yunx.app.data.db.DownloadTaskEntity
 import com.yunx.app.data.download.DownloadDebugLog
 import com.yunx.app.data.download.DownloadManager
 import com.yunx.app.data.download.DownloadStats
+import com.yunx.app.data.motrix.MotrixClient
+import com.yunx.app.data.motrix.MotrixSender
 import com.yunx.app.data.prefs.SettingsRepository
 import com.yunx.app.ui.SnackbarController
 import com.yunx.app.util.DesktopActions
@@ -67,6 +69,75 @@ class DownloadViewModel(private val manager: DownloadManager) : ViewModel() {
         viewModelScope.launch {
             val ok = manager.redownload(task.id)
             SnackbarController.show(if (ok) "已重新加入下载" else "直链已过期，请重新获取下载链接")
+        }
+    }
+
+    /**
+     * 当前是否应该显示「发送到 Motrix」入口：
+     * 设置里没关掉，且能从 `%APPDATA%\Motrix\system.json` 读到 RPC 参数（或手填了端口）。
+     */
+    fun motrixAvailable(): Boolean = MotrixSender.available(settings)
+
+    /**
+     * 把已有任务的直链交给本机 Motrix 下载。
+     *
+     * 请求头（Cookie / Referer / UA）必须一起带上：这些直链是防盗链 CDN 地址，
+     * 只把 URL 粘进下载器会被 412/403。请求头在库里是加密的，只能由
+     * [DownloadManager.headersFor] 解出来。投递完成后 YunX 不跟踪该任务。
+     */
+    fun sendTaskToMotrix(task: DownloadTaskEntity) {
+        viewModelScope.launch {
+            val headers = manager.headersFor(task.id)
+            val result = MotrixSender.send(
+                url = task.url,
+                fileName = task.fileName,
+                headers = headers,
+                saveDir = task.saveDir,
+                settings = settings
+            )
+            SnackbarController.show(MotrixSender.describe(result, task.fileName))
+        }
+    }
+
+    /**
+     * 把**整个文件夹组**的任务逐条交给 Motrix，并保持子目录结构。
+     *
+     * 文件夹组没有单一直链，也没有分享链接，所以只能逐条投递；`fileName` 里带的是
+     * 相对路径（`A/B/c.mp4`），交给 aria2 后会在 [saveDir] 下原样还原 `A/B/c.mp4`
+     * （aria2 自己创建中间目录）。逐个串行发送：线程数再多也没有意义，
+     * 反而会让 Motrix 的并发队列瞬间吃满。
+     */
+    fun sendGroupToMotrix(tasks: List<DownloadTaskEntity>, saveDir: String) {
+        if (tasks.isEmpty()) return
+        viewModelScope.launch {
+            var succeeded = 0
+            var failed = 0
+            var lastFailure = ""
+            for (task in tasks) {
+                val headers = manager.headersFor(task.id)
+                val result = MotrixSender.send(
+                    url = task.url,
+                    fileName = task.fileName,
+                    headers = headers,
+                    saveDir = saveDir,
+                    keepSubDirs = true,
+                    settings = settings
+                )
+                if (result is MotrixClient.Result.Success) {
+                    succeeded++
+                } else {
+                    failed++
+                    lastFailure = (result as MotrixClient.Result.Failure).message
+                }
+            }
+            val folder = tasks.first().fileName.replace('\\', '/').substringBefore('/')
+            SnackbarController.show(
+                if (failed == 0) {
+                    "已发送 $succeeded 个文件到 Motrix：$folder"
+                } else {
+                    "已发送 $succeeded 个文件到 Motrix，$failed 个失败：$lastFailure"
+                }
+            )
         }
     }
 

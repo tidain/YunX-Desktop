@@ -37,6 +37,7 @@ import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.DriveFileMove
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.FolderOpen
+import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.AlertDialog
@@ -78,6 +79,7 @@ import com.yunx.app.ui.items.MultiSelectAction
 import com.yunx.app.ui.items.MultiSelectBar
 import com.yunx.app.ui.components.ScrollToTopButton
 import com.yunx.app.ui.components.rememberDownloadDirPicker
+import com.yunx.app.ui.components.rememberMotrixSend
 import com.yunx.app.ui.resolve.DownloadLinkDialog
 import com.yunx.app.ui.resolve.BackToParentItem
 import com.yunx.app.ui.resolve.CrumbBar
@@ -128,6 +130,7 @@ fun BaiduCloudScreen(
     var pendingBaiduSaveDir by remember { mutableStateOf("") }
     // 「下载到…」目录选择器
     val pickDownloadDir = rememberDownloadDirPicker()
+    val motrixSend = rememberMotrixSend()
 
     /** 判断是否需要弹限速提示；需要则记录待执行动作并弹窗，否则直接执行 */
     fun maybeShowBaiduLimit(
@@ -165,7 +168,8 @@ fun BaiduCloudScreen(
             link = link,
             onDownload = { viewModel.startDownload() },
             onDismiss = { viewModel.dismissDownloadDialog() },
-            saveDir = viewModel.pendingSaveDir.takeIf { it.isNotBlank() }
+            saveDir = viewModel.pendingSaveDir.takeIf { it.isNotBlank() },
+            onSendToMotrix = { motrixSend { dir -> viewModel.sendToMotrix(dir) } }
         )
     }
 
@@ -368,6 +372,9 @@ fun BaiduCloudScreen(
                                         }
                                     }
                                 },
+                                MultiSelectAction("发送到 Motrix", Icons.Outlined.OpenInNew, MaterialTheme.colorScheme.primary) {
+                                    motrixSend { dir -> viewModel.sendSelectedToMotrix(dir) }
+                                },
                                 MultiSelectAction("分享", Icons.Outlined.Share, MaterialTheme.colorScheme.primary) {
                                     showShare = true
                                 },
@@ -418,6 +425,10 @@ fun BaiduCloudScreen(
                     showActionSheet = false
                     viewModel.downloadFolder(dir)
                 }
+            },
+            onSendFolderToMotrix = {
+                showActionSheet = false
+                motrixSend { dir -> viewModel.sendFolderToMotrix(dir) }
             },
             onRename = {
                 showActionSheet = false
@@ -592,6 +603,7 @@ private fun BaiduActionSheet(
     onDownloadTo: () -> Unit,
     onDownloadFolder: (() -> Unit)? = null,
     onDownloadFolderTo: (() -> Unit)? = null,
+    onSendFolderToMotrix: (() -> Unit)? = null,
     onRename: () -> Unit,
     onMove: () -> Unit,
     onShare: () -> Unit,
@@ -646,6 +658,12 @@ private fun BaiduActionSheet(
                 }
                 if (onDownloadFolderTo != null) {
                     BaiduActionItem(Icons.Outlined.FolderOpen, "下载文件夹到…", "选择本次保存的文件夹（不改全局设置）", MaterialTheme.colorScheme.primary, onDownloadFolderTo)
+                }
+                if (onSendFolderToMotrix != null) {
+                    BaiduActionItem(
+                        Icons.Outlined.OpenInNew, "发送到 Motrix", "整个文件夹逐条投递给 Motrix（保持子目录结构）",
+                        MaterialTheme.colorScheme.primary, onSendFolderToMotrix
+                    )
                 }
             }
             BaiduActionItem(Icons.Outlined.Share, "分享", "生成分享链接（带提取码）", MaterialTheme.colorScheme.primary, onShare)

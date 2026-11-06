@@ -33,6 +33,7 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.DriveFileMove
+import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.AlertDialog
@@ -63,6 +64,7 @@ import androidx.compose.ui.unit.dp
 import com.yunx.app.ui.items.MultiSelectAction
 import com.yunx.app.ui.items.MultiSelectBar
 import com.yunx.app.ui.components.ScrollToTopButton
+import com.yunx.app.ui.components.rememberMotrixSend
 import com.yunx.app.ui.resolve.DownloadLinkDialog
 import com.yunx.app.ui.resolve.BackToParentItem
 import com.yunx.app.ui.resolve.CrumbBar
@@ -92,6 +94,8 @@ fun CloudDriveScreen(
     }
     // 文件列表滚动状态（返回顶部按钮用）
     val listState = rememberLazyListState()
+    // 发送到 Motrix：设置里开了「发送前询问保存目录」就先弹目录选择器
+    val motrixSend = rememberMotrixSend()
     // 批量操作弹窗（多选模式底部栏触发：分享/移动需要设置或选目录，下载/删除直接执行）
     var showBatchActions by remember { mutableStateOf(false) }
     var batchInitial by remember { mutableStateOf(com.yunx.app.ui.screens.BatchStep.MENU) }
@@ -122,7 +126,8 @@ fun CloudDriveScreen(
             link = link,
             onDownload = { viewModel.startDownload() },
             onDismiss = { viewModel.dismissDownloadDialog() },
-            saveDir = viewModel.pendingSaveDir.takeIf { it.isNotBlank() }
+            saveDir = viewModel.pendingSaveDir.takeIf { it.isNotBlank() },
+            onSendToMotrix = { motrixSend { dir -> viewModel.sendToMotrix(dir) } }
         )
     }
 
@@ -319,6 +324,9 @@ fun CloudDriveScreen(
                             MultiSelectAction("下载", Icons.Outlined.Download, MaterialTheme.colorScheme.primary) {
                                 // 批量下载：保持网盘页显示处理中弹窗，不自动切页
                                 viewModel.downloadSelected()
+                            },
+                            MultiSelectAction("发送到 Motrix", Icons.Outlined.OpenInNew, MaterialTheme.colorScheme.primary) {
+                                motrixSend { dir -> viewModel.sendSelectedToMotrix(dir) }
                             },
                             MultiSelectAction("分享", Icons.Outlined.Share, MaterialTheme.colorScheme.primary) {
                                 batchInitial = com.yunx.app.ui.screens.BatchStep.SHARE

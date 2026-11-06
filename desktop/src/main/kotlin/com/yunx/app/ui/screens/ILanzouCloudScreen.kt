@@ -37,6 +37,7 @@ import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.DriveFileMove
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.FolderOpen
+import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -71,6 +72,7 @@ import com.yunx.app.data.network.model.ShareFile
 import com.yunx.app.ui.components.FadeAlertDialog
 import com.yunx.app.ui.components.ScrollToTopButton
 import com.yunx.app.ui.components.rememberDownloadDirPicker
+import com.yunx.app.ui.components.rememberMotrixSend
 import com.yunx.app.ui.items.MultiSelectAction
 import com.yunx.app.ui.items.MultiSelectBar
 import com.yunx.app.ui.resolve.BackToParentItem
@@ -118,6 +120,7 @@ fun ILanzouCloudScreen(
     var showRename by remember { mutableStateOf(false) }
     var showMove by remember { mutableStateOf(false) }
     val pickDownloadDir = rememberDownloadDirPicker()
+    val motrixSend = rememberMotrixSend()
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var showCreateFolder by remember { mutableStateOf(false) }
 
@@ -140,7 +143,8 @@ fun ILanzouCloudScreen(
             link = link,
             onDownload = { viewModel.startDownload() },
             onDismiss = { viewModel.dismissDownloadDialog() },
-            saveDir = viewModel.pendingSaveDir.takeIf { it.isNotBlank() }
+            saveDir = viewModel.pendingSaveDir.takeIf { it.isNotBlank() },
+            onSendToMotrix = { motrixSend { dir -> viewModel.sendToMotrix(dir) } }
         )
     }
 
@@ -335,6 +339,9 @@ fun ILanzouCloudScreen(
                                 MultiSelectAction("下载到…", Icons.Outlined.FolderOpen, MaterialTheme.colorScheme.primary) {
                                     pickDownloadDir { viewModel.downloadSelected(it) }
                                 },
+                                MultiSelectAction("发送到 Motrix", Icons.Outlined.OpenInNew, MaterialTheme.colorScheme.primary) {
+                                    motrixSend { dir -> viewModel.sendSelectedToMotrix(dir) }
+                                },
                                 MultiSelectAction("移动", Icons.Outlined.DriveFileMove, MaterialTheme.colorScheme.primary) {
                                     viewModel.openMoveRoot()
                                     showMove = true
@@ -373,6 +380,10 @@ fun ILanzouCloudScreen(
                     showActionSheet = false
                     viewModel.downloadFolder(dir)
                 }
+            },
+            onSendFolderToMotrix = {
+                showActionSheet = false
+                motrixSend { dir -> viewModel.sendFolderToMotrix(dir) }
             },
             onRename = {
                 showActionSheet = false
@@ -487,6 +498,7 @@ private fun ILanzouActionSheet(
     onDownloadTo: () -> Unit,
     onDownloadFolder: (() -> Unit)? = null,
     onDownloadFolderTo: (() -> Unit)? = null,
+    onSendFolderToMotrix: (() -> Unit)? = null,
     onRename: () -> Unit,
     onMove: () -> Unit,
     onDelete: () -> Unit,
@@ -556,6 +568,12 @@ private fun ILanzouActionSheet(
                     ILanzouActionItem(
                         Icons.Outlined.FolderOpen, "下载文件夹到…", "选择本次保存的文件夹（不改全局设置）",
                         MaterialTheme.colorScheme.primary, onDownloadFolderTo
+                    )
+                }
+                if (onSendFolderToMotrix != null) {
+                    ILanzouActionItem(
+                        Icons.Outlined.OpenInNew, "发送到 Motrix", "整个文件夹逐条投递给 Motrix（保持子目录结构）",
+                        MaterialTheme.colorScheme.primary, onSendFolderToMotrix
                     )
                 }
             }

@@ -121,18 +121,26 @@ object BrowserCookieImporter {
         DriverManager.getConnection("jdbc:sqlite:${dbFile.absolutePath}").use { conn ->
             val likeClause = domains.joinToString(" OR ") { "host_key LIKE ?" }
             conn.prepareStatement(
-                "SELECT host_key, name, encrypted_value FROM cookies WHERE $likeClause"
+                "SELECT host_key, name, encrypted_value, path FROM cookies WHERE $likeClause"
             ).use { st ->
                 domains.forEachIndexed { i, d -> st.setString(i + 1, "%$d%") }
                 st.executeQuery().use { rs ->
                     val pairs = mutableListOf<String>()
+                    val baiduCookies = mutableListOf<BaiduBrowserCookie>()
                     while (rs.next()) {
                         val name = rs.getString(2)
                         val value = decryptChromiumValue(rs.getBytes(3)) ?: continue
-                        if (name.isNotBlank()) pairs += "$name=$value"
+                        if (name.isNotBlank()) {
+                            pairs += "$name=$value"
+                            baiduCookies += BaiduBrowserCookie(name, value, rs.getString(1), rs.getString(4))
+                        }
                     }
                     if (pairs.isEmpty()) return null
-                    return pairs.joinToString("; ")
+                    return if (domains == domainSuffixes("BAIDU")) {
+                        baiduCookieHeader(baiduCookies).takeIf { it.isNotBlank() }
+                    } else {
+                        pairs.joinToString("; ")
+                    }
                 }
             }
         }
@@ -188,18 +196,26 @@ object BrowserCookieImporter {
         DriverManager.getConnection("jdbc:sqlite:${dbFile.absolutePath}").use { conn ->
             val likeClause = domains.joinToString(" OR ") { "host LIKE ?" }
             conn.prepareStatement(
-                "SELECT host, name, value FROM moz_cookies WHERE $likeClause"
+                "SELECT host, name, value, path FROM moz_cookies WHERE $likeClause"
             ).use { st ->
                 domains.forEachIndexed { i, d -> st.setString(i + 1, "%$d%") }
                 st.executeQuery().use { rs ->
                     val pairs = mutableListOf<String>()
+                    val baiduCookies = mutableListOf<BaiduBrowserCookie>()
                     while (rs.next()) {
                         val name = rs.getString(2)
                         val value = rs.getString(3)
-                        if (name.isNotBlank()) pairs += "$name=$value"
+                        if (name.isNotBlank()) {
+                            pairs += "$name=$value"
+                            baiduCookies += BaiduBrowserCookie(name, value, rs.getString(1), rs.getString(4))
+                        }
                     }
                     if (pairs.isEmpty()) return null
-                    return pairs.joinToString("; ")
+                    return if (domains == domainSuffixes("BAIDU")) {
+                        baiduCookieHeader(baiduCookies).takeIf { it.isNotBlank() }
+                    } else {
+                        pairs.joinToString("; ")
+                    }
                 }
             }
         }

@@ -12,7 +12,7 @@ import com.yunx.app.ui.viewmodel.BaiduAccountViewModel
 
 /**
  * 百度网盘登录页：内嵌浏览器优先，粘贴/自动导入兜底。
- * Cookie 需包含 BDUSS=。
+ * Cookie 需包含 BDUSS= 与 Pan 域 STOKEN=，且通过服务端验证。
  */
 @Composable
 fun BaiduLoginScreen(
@@ -27,7 +27,7 @@ fun BaiduLoginScreen(
         JcefLoginPane(
             loginUrl = BaiduConstants.LOGIN_URL,
             domains = listOf(".baidu.com"),
-            requiredKeys = listOf("BDUSS"),
+            requiredKeys = listOf("BDUSS", "STOKEN"),
             platform = "BAIDU",
             onSave = { cookie -> viewModel.saveBaiduAccount(cookie) },
             onBack = onBack,
@@ -39,7 +39,7 @@ fun BaiduLoginScreen(
             title = "百度网盘登录",
             loginUrl = BaiduConstants.LOGIN_URL,
             platform = "BAIDU",
-            cookieRequirement = "Cookie 需包含 BDUSS=",
+            cookieRequirement = "Cookie 需包含 BDUSS= 与 STOKEN=，请从 pan.baidu.com 的登录请求中完整复制",
             validityHint = "Cookie 失效后需重新登录",
             onSave = { cookie -> viewModel.saveBaiduAccount(cookie) },
             onBack = onBack,

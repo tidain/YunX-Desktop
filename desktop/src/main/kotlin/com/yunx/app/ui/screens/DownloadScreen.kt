@@ -90,6 +90,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.yunx.app.data.db.DownloadTaskEntity
+import com.yunx.app.data.network.BaiduP2pSpec
 import com.yunx.app.data.download.DownloadGrouping
 import com.yunx.app.data.download.DownloadPlatform
 import com.yunx.app.data.download.DownloadSaver
@@ -1336,10 +1337,12 @@ private fun TaskContextMenu(
                         SnackbarController.show("获取分享链接失败")
                     }
                 }
-                ContextMenuRow(icon = Icons.Outlined.ContentCopy, label = "复制直链") {
-                    onDismiss()
-                    DesktopActions.copyToClipboard(directUrl)
-                    SnackbarController.show("直链已复制")
+                if (!BaiduP2pSpec.isP2p(directUrl)) {
+                    ContextMenuRow(icon = Icons.Outlined.ContentCopy, label = "复制直链") {
+                        onDismiss()
+                        DesktopActions.copyToClipboard(directUrl)
+                        SnackbarController.show("直链已复制")
+                    }
                 }
                 if (onDebug != null) {
                     ContextMenuRow(icon = Icons.Outlined.BugReport, label = "调试信息") {

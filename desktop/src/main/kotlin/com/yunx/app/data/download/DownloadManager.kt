@@ -11,6 +11,9 @@ import com.yunx.app.util.WindowsToastNotifier
 import com.yunx.app.data.db.DownloadTaskDao
 import com.yunx.app.data.db.DownloadTaskEntity
 import com.yunx.app.data.preview.FfplayManager
+import com.yunx.app.data.network.BaiduConstants
+import com.yunx.app.data.network.BaiduP2pSpec
+import com.yunx.app.data.prefs.SettingsRepository
 import com.yunx.app.data.security.FileCredentialCipher
 import com.yunx.app.data.security.CredentialCipher
 import com.yunx.app.ui.EngineInstallPrompt
@@ -127,6 +130,7 @@ data class DownloadResourceDebug(
 private val PLAN_CHUNKS = Regex("chunks=(\\d+)")
 private val PLAN_TOTAL = Regex("total=(\\d+)")
 private val PLAN_MAIN = Regex("main=(\\d+)")
+private val PLAN_P2P_CHUNK_SIZE = Regex("chunkSize=(\\d+)")
 
 /** 单文件 Range 分片的安全并发上限。迅雷等 CDN 对单文件并发 Range 有阈值，
  *  超过约 8 个并发会把多余请求降级为 200 整文件（忽略 Range），
@@ -320,6 +324,20 @@ private class InflightChunk(val start: Long, val size: Long, val worker: Int) {
  */
 private class DirectWriteFallbackException(message: String) : Exception(message)
 
+/** 百度 P2P 模式及需要本地处理的资源统一使用内置下载器。 */
+internal fun shouldUseEngineForTask(
+    platform: String,
+    needsLocalPipeline: Boolean,
+    engineEnabled: Boolean,
+    engineInstalled: Boolean,
+    baiduDownloadMode: String
+): Boolean =
+    !needsLocalPipeline &&
+        platform != DownloadPlatform.GITHUB &&
+        !(platform == DownloadPlatform.BAIDU &&
+            baiduDownloadMode == SettingsRepository.BAIDU_DOWNLOAD_MODE_P2P) &&
+        engineEnabled && engineInstalled
+
 /**
  * 下载任务管理器：
  * - 任务持久化（Room），状态流转 PENDING → DOWNLOADING → COMPLETED / PAUSED / FAILED；
@@ -352,7 +370,13 @@ class DownloadManager(
      * 是否启用外部 Gopeed 引擎（设置页「下载引擎」选择 Gopeed 时为 true）。
      * 只决定**新任务**的归属；实际还会再判一次平台（GitHub 除外）与内核是否已导入。
      */
-    private val engineEnabledProvider: () -> Boolean = { false }
+    private val engineEnabledProvider: () -> Boolean = { false },
+    /** 百度 P2P 模式的 CDN 回退也由内置下载器执行。 */
+    private val baiduDownloadModeProvider: () -> String = { SettingsRepository.BAIDU_DOWNLOAD_MODE_CDN },
+    /** 百度 P2P 并发数；同时受任务的线程数设置限制。 */
+    private val baiduP2pWorkersProvider: () -> Int = { 8 },
+    /** 每次开始/恢复时创建下载器，动态读取慢节点回退设置。 */
+    private val baiduP2pDownloaderProvider: () -> BaiduP2pDownloader = { BaiduP2pDownloader() }
 ) {
     private val credentialCipher: CredentialCipher = FileCredentialCipher()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -799,7 +823,7 @@ class DownloadManager(
             DiagnosticLog.dbOp("download_task", "insert", rowsOf = { 1 }) {
                 dao.insert(
                     DownloadTaskEntity(
-                        url = url,
+                        url = encodeTaskUrl(url),
                         fileName = safeName,
                         requestHeadersJson = encodeHeaders(headers),
                         altSourcesJson = encodeAltSources(altSources),
@@ -868,8 +892,9 @@ class DownloadManager(
         // 引擎分流：选了 Gopeed 且内核已导入时由外部引擎执行（GitHub 除外，见 shouldUseEngine）。
         // ★ DASH 合轨 / 动图合成只能在应用内做：引擎只会下主 URL，不会拉音轨、不会合成，
         //   所以这两类任务强制走内置下载器。
-        val needsLocalPipeline = mergeAudioUrl.isNotBlank() || motionUrl.isNotBlank()
-        if (!needsLocalPipeline && shouldUseEngine(taskPlatform)) {
+        val needsLocalPipeline = mergeAudioUrl.isNotBlank() || motionUrl.isNotBlank() ||
+            BaiduP2pSpec.isP2p(url)
+        if (shouldUseEngine(taskPlatform, needsLocalPipeline)) {
             startViaEngine(id, url, safeName, headers, taskPlatform, saveDir)
         } else {
             start(id, headers)
@@ -903,9 +928,10 @@ class DownloadManager(
      * enqueue 的拦截说明原因。
      */
     suspend fun redownload(id: Long): Boolean {
-        val task = dao.get(id) ?: return false
+        val storedTask = dao.get(id) ?: return false
+        val task = storedTask.copy(url = decodeTaskUrl(storedTask.url))
         val headers = loadPersistedHeaders(id)
-        if (!P2PLink.matches(task.url)) {
+        if (!P2PLink.matches(task.url) && !BaiduP2pSpec.isP2p(task.url)) {
             val valid = runCatching { downloader.getTotalSize(task.url, headers) != null }.getOrDefault(false)
             if (!valid) return false
         }
@@ -1203,8 +1229,11 @@ class DownloadManager(
      * 新任务是否交给外部引擎：平台不是 GitHub（引擎无法按镜像回退）、设置里选了 Gopeed、
      * 且内核已导入。放在 enqueue 末尾统一判断，所有调用点自动生效。
      */
-    private fun shouldUseEngine(platform: String): Boolean =
-        platform != DownloadPlatform.GITHUB && engineEnabledProvider() && GopeedEngine.isInstalled()
+    private fun shouldUseEngine(platform: String, needsLocalPipeline: Boolean = false): Boolean =
+        shouldUseEngineForTask(
+            platform, needsLocalPipeline, engineEnabledProvider(), GopeedEngine.isInstalled(),
+            baiduDownloadModeProvider()
+        )
 
     /** 引擎落盘基准目录：任务级覆盖优先，否则设置里的自定义下载目录，最后系统「下载」目录 */
     private fun engineBaseDir(saveDirOverride: String? = null): File =
@@ -1740,6 +1769,24 @@ class DownloadManager(
     /** 当前协程是否仍活跃（暂停/删除触发取消后为 false） */
     private suspend fun isTaskActive(): Boolean = coroutineContext[Job]?.isActive == true
 
+    /** 下载快照含分片解密密钥，使用与请求头相同的凭证加密机制保存。 */
+    private fun encodeTaskUrl(url: String): String =
+        if (BaiduP2pSpec.isP2p(url)) {
+            BaiduP2pSpec.PREFIX + credentialCipher.encrypt(
+                url.removePrefix(BaiduP2pSpec.PREFIX), "download.baiduP2p"
+            )
+        } else {
+            url
+        }
+
+    /** 同时兼容上游及旧版本未加密的快照。 */
+    private fun decodeTaskUrl(stored: String): String {
+        if (!BaiduP2pSpec.isP2p(stored)) return stored
+        val payload = stored.removePrefix(BaiduP2pSpec.PREFIX)
+        if (!credentialCipher.isEncrypted(payload)) return stored
+        return BaiduP2pSpec.PREFIX + credentialCipher.decrypt(payload, "download.baiduP2p")
+    }
+
     /**
      * 取回 DASH 音轨请求头（`download_task.mergeAudioHeadersJson`，加密落库）。
      *
@@ -1810,10 +1857,82 @@ class DownloadManager(
         }
     }
 
+    /** 缓存下载共享空间预留，包含同时保留分片与最终文件所需的空间。 */
+    private suspend fun awaitCacheSpace(id: Long, task: DownloadTaskEntity, total: Long?) {
+        // 写盘空间守卫（Issue #17）：开始下载前先确认缓存盘 / 下载盘放得下。
+        // 同一磁盘按 2 倍文件大小校验（分片与最终文件在合并阶段会同时存在）；
+        // 同时把其它进行中任务预计还要写入缓存盘的字节数一起算上（避免并发任务合计写爆缓存盘）。
+        val saveBaseDir = DownloadSaver.resolveSaveDir(effectiveSaveDir(task))
+        var spaceWaitLogged = false
+        while (true) {
+            var existingOnDisk = 0L
+            val spaceError = synchronized(spaceGuardLock) {
+                val actualByTask = DownloadCacheMaintenance.chunkBytesByTask()
+                existingOnDisk = actualByTask[id] ?: 0L
+                val sameVolume = DownloadCacheMaintenance.sameVolume(AppContext.cacheDir, saveBaseDir)
+                val reserved = plannedCacheBytes.entries
+                    .filter { it.key != id }
+                    .sumOf { (otherId, expected) ->
+                        val written = actualByTask[otherId] ?: 0L
+                        val remaining = (expected - written).coerceAtLeast(0L)
+                        // 同盘时对方合并阶段还要再占一份最终文件
+                        if (sameVolume) remaining + expected else remaining
+                    }
+                DownloadCacheMaintenance.checkBeforeDownload(
+                    cacheDir = AppContext.cacheDir,
+                    saveDir = saveBaseDir,
+                    totalBytes = total ?: 0L,
+                    alreadyOnDiskBytes = existingOnDisk,
+                    reservedCacheBytes = reserved
+                ).also { reason ->
+                    if (reason == null) plannedCacheBytes[id] = (total ?: 0L).coerceAtLeast(0L)
+                }
+            }
+            if (spaceError == null) break
+
+            if (!isTaskActive()) throw CancellationException("下载被取消")
+            // ① 单个文件本身就放不下（比磁盘还大 / 成品盘放不下）：等待也不会变好，直接失败
+            val permanent = DownloadCacheMaintenance.isPermanentSpaceShortage(
+                cacheFree = DownloadCacheMaintenance.freeSpace(AppContext.cacheDir),
+                destFree = DownloadCacheMaintenance.freeSpace(saveBaseDir),
+                sameVolume = DownloadCacheMaintenance.sameVolume(AppContext.cacheDir, saveBaseDir),
+                totalBytes = total ?: 0L,
+                alreadyOnDiskBytes = existingOnDisk
+            )
+            if (permanent) {
+                Log.w(TAG, "runTask: id=$id 空间不足：$spaceError")
+                DownloadDebugLog.record(id, "空间不足", spaceError)
+                DiagnosticLog.warn(DiagnosticLog.DOWNLOAD, "task_no_space", "task=$id | $spaceError")
+                throw DownloadCacheMaintenance.LowDiskSpaceException(spaceError)
+            }
+            // 没有任何其它任务会释放缓存：继续等待也不会变好，按空间不足失败并提示用户处理
+            val hasOtherActiveTask = synchronized(spaceGuardLock) {
+                plannedCacheBytes.keys.any { it != id }
+            }
+            if (!hasOtherActiveTask) {
+                Log.w(TAG, "runTask: id=$id 空间不足且无其它任务可等待：$spaceError")
+                DownloadDebugLog.record(id, "空间不足", spaceError)
+                throw DownloadCacheMaintenance.LowDiskSpaceException(spaceError)
+            }
+            // ② 只是被其它进行中的任务暂时占着缓存：排队等待它们完成，避免整批任务瞬间全失败
+            if (!spaceWaitLogged) {
+                spaceWaitLogged = true
+                Log.w(TAG, "runTask: id=$id 等待磁盘空间：$spaceError")
+                DownloadDebugLog.record(id, "等待空间", spaceError)
+                DiagnosticLog.warn(DiagnosticLog.DOWNLOAD, "task_space_wait", "task=$id | $spaceError")
+                // 卡片显示「等待中」；等待期间不重复写库
+                dao.updateStatus(id, DownloadTaskEntity.STATUS_PENDING)
+            }
+            delay(2_000)
+        }
+        dao.updateStatus(id, DownloadTaskEntity.STATUS_DOWNLOADING)
+    }
+
     private suspend fun runTask(id: Long, headers: Map<String, String>) {
         // 协程已被取消（暂停/删除）：直接退出，不写状态
         if (!isTaskActive()) return
-        var task = dao.get(id) ?: return
+        val storedTask = dao.get(id) ?: return
+        var task = storedTask.copy(url = decodeTaskUrl(storedTask.url))
         dao.updateStatus(id, DownloadTaskEntity.STATUS_DOWNLOADING)
         taskStartTimes[id] = System.currentTimeMillis()
         Log.d(TAG, "runTask: id=$id fileName=${task.fileName}")
@@ -1861,6 +1980,46 @@ class DownloadManager(
         // 总大小以服务器探测为准（Range0-0 的 Content-Range 是真实总大小），
         // 避免各平台传入的 size 与实际不符导致分片区间错误 → 文件截断/膨胀损坏
         // 镜像主 URL 探测失败且带回退直连时（GitHub 下载），整任务切到原始直连重下，避免镜像挂掉整任务失败
+        if (BaiduP2pSpec.isP2p(task.url)) {
+            val spec = BaiduP2pSpec.decode(task.url)
+                ?: throw IllegalStateException("百度 P2P 下载信息损坏，请重新解析链接")
+            val fallback = spec.cdnUrls.firstOrNull()
+            val cachedPlan = File(chunkDirOf(id), "plan.txt").takeIf { it.isFile }?.readText().orEmpty()
+            val hasCdnResumeState =
+                (task.directMode in 1..2 && task.directPart.isNotBlank() && File(task.directPart).isFile) ||
+                    (!cachedPlan.startsWith("p2p ") && PLAN_CHUNKS.containsMatchIn(cachedPlan) &&
+                        PLAN_TOTAL.containsMatchIn(cachedPlan))
+            if (hasCdnResumeState && !fallback.isNullOrBlank()) {
+                // 已进入 CDN 的任务沿用其缓存/直写计划，恢复时不再清空数据重新尝试 P2P。
+                task = task.copy(url = fallback)
+                taskSizes[id] = spec.fileSize
+            } else {
+                try {
+                    p2pDownload(id, task, spec, headers)
+                    return
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: DownloadCacheMaintenance.LowDiskSpaceException) {
+                    throw e
+                } catch (e: Exception) {
+                    // 已有 P2P 分片交给重试续传；没有进度时再整体切到明文 CDN。
+                    val progressed = chunkDirOf(id).walkTopDown()
+                        .filter { it.isFile && it.name.startsWith("part_") }
+                        .sumOf { it.length() }
+                    if (progressed > 0L || fallback.isNullOrBlank()) throw e
+                    Log.w(TAG, "runTask: id=$id P2P 初始化失败，回退 CDN：${e.message}")
+                    DownloadDebugLog.record(
+                        id, "P2P 回退 CDN",
+                        "尚未产生分片，切换到 ${LogRedactor.url(fallback)}：${e.message ?: e.javaClass.simpleName}"
+                    )
+                    chunkDirOf(id).deleteRecursively()
+                    taskPartDigests.remove(id)
+                    task = task.copy(url = fallback)
+                    taskSizes[id] = spec.fileSize
+                }
+            }
+        }
+
         val fallbackUrl = taskFallbackUrls[id]
         var probedSize = downloader.getTotalSize(task.url, headers)
         if (probedSize == null && !fallbackUrl.isNullOrBlank()) {
@@ -1908,73 +2067,7 @@ class DownloadManager(
             dao.updateDirect(id, "", 0)
             task = task.copy(directPart = "", directMode = 0)
         }
-        // 写盘空间守卫（Issue #17）：开始下载前先确认缓存盘 / 下载盘放得下。
-        // 同一磁盘按 2 倍文件大小校验（分片与最终文件在合并阶段会同时存在）；
-        // 同时把其它进行中任务预计还要写入缓存盘的字节数一起算上（避免并发任务合计写爆缓存盘）。
-        val saveBaseDir = DownloadSaver.resolveSaveDir(effectiveSaveDir(task))
-        var spaceWaitLogged = false
-        while (true) {
-            var existingOnDisk = 0L
-            val spaceError = synchronized(spaceGuardLock) {
-                val actualByTask = DownloadCacheMaintenance.chunkBytesByTask()
-                existingOnDisk = actualByTask[id] ?: 0L
-                val sameVolume = DownloadCacheMaintenance.sameVolume(AppContext.cacheDir, saveBaseDir)
-                val reserved = plannedCacheBytes.entries
-                    .filter { it.key != id }
-                    .sumOf { (otherId, expected) ->
-                        val written = actualByTask[otherId] ?: 0L
-                        val remaining = (expected - written).coerceAtLeast(0L)
-                        // 同盘时对方合并阶段还要再占一份最终文件
-                        if (sameVolume) remaining + expected else remaining
-                    }
-                DownloadCacheMaintenance.checkBeforeDownload(
-                    cacheDir = AppContext.cacheDir,
-                    saveDir = saveBaseDir,
-                    totalBytes = total ?: 0L,
-                    alreadyOnDiskBytes = existingOnDisk,
-                    reservedCacheBytes = reserved
-                ).also { reason ->
-                    if (reason == null) plannedCacheBytes[id] = (total ?: 0L).coerceAtLeast(0L)
-                }
-            }
-            if (spaceError == null) break
-
-            if (!isTaskActive()) return
-            // ① 单个文件本身就放不下（比磁盘还大 / 成品盘放不下）：等待也不会变好，直接失败
-            val permanent = DownloadCacheMaintenance.isPermanentSpaceShortage(
-                cacheFree = DownloadCacheMaintenance.freeSpace(AppContext.cacheDir),
-                destFree = DownloadCacheMaintenance.freeSpace(saveBaseDir),
-                sameVolume = DownloadCacheMaintenance.sameVolume(AppContext.cacheDir, saveBaseDir),
-                totalBytes = total ?: 0L,
-                alreadyOnDiskBytes = existingOnDisk
-            )
-            if (permanent) {
-                Log.w(TAG, "runTask: id=$id 空间不足：$spaceError")
-                DownloadDebugLog.record(id, "空间不足", spaceError)
-                DiagnosticLog.warn(DiagnosticLog.DOWNLOAD, "task_no_space", "task=$id | $spaceError")
-                throw DownloadCacheMaintenance.LowDiskSpaceException(spaceError)
-            }
-            // 没有任何其它任务会释放缓存：继续等待也不会变好，按空间不足失败并提示用户处理
-            val hasOtherActiveTask = synchronized(spaceGuardLock) {
-                plannedCacheBytes.keys.any { it != id }
-            }
-            if (!hasOtherActiveTask) {
-                Log.w(TAG, "runTask: id=$id 空间不足且无其它任务可等待：$spaceError")
-                DownloadDebugLog.record(id, "空间不足", spaceError)
-                throw DownloadCacheMaintenance.LowDiskSpaceException(spaceError)
-            }
-            // ② 只是被其它进行中的任务暂时占着缓存：排队等待它们完成，避免整批任务瞬间全失败
-            if (!spaceWaitLogged) {
-                spaceWaitLogged = true
-                Log.w(TAG, "runTask: id=$id 等待磁盘空间：$spaceError")
-                DownloadDebugLog.record(id, "等待空间", spaceError)
-                DiagnosticLog.warn(DiagnosticLog.DOWNLOAD, "task_space_wait", "task=$id | $spaceError")
-                // 卡片显示「等待中」；等待期间不重复写库
-                dao.updateStatus(id, DownloadTaskEntity.STATUS_PENDING)
-            }
-            delay(2_000)
-        }
-        dao.updateStatus(id, DownloadTaskEntity.STATUS_DOWNLOADING)
+        awaitCacheSpace(id, task, total)
         if (total == null) {
             // 服务器不返回文件大小（Range/Content-Length 均缺失）：降级为流式下载（开放区间 Range）
             Log.w(TAG, "runTask: id=$id 无法获取总大小，降级流式下载 origin=${LogRedactor.url(task.url)}")
@@ -2067,7 +2160,16 @@ class DownloadManager(
         }
         val sources = buildList {
             add(DownloadSource(task.url, headers))
-            altSources.forEach { source -> if (source.url.isNotBlank()) add(source) }
+            altSources.forEach { source ->
+                if (BaiduP2pSpec.isP2p(source.url)) {
+                    // 普通 HTTP 分片只能使用明文 CDN；保留每个备用账号自己的请求头。
+                    BaiduP2pSpec.decode(source.url)?.cdnUrls?.forEach { cdn ->
+                        if (cdn.isNotBlank()) add(DownloadSource(cdn, source.headers))
+                    }
+                } else if (source.url.isNotBlank()) {
+                    add(source)
+                }
+            }
         }
         /** 某个字节偏移所在分片用哪个源：offset / chunkSize 就是分片序号，按序号轮转 */
         fun sourceOf(offset: Long): DownloadSource =
@@ -3158,6 +3260,8 @@ class DownloadManager(
         try {
             val initial = if (total != null && total > 0) part.length().coerceAtMost(total) else part.length()
             if (!isTaskActive()) return
+            // 暂停时磁盘写入可能领先于节流落库，收到新数据前先校正恢复进度。
+            dao.updateProgress(id, DownloadTaskEntity.STATUS_DOWNLOADING, initial, total ?: 0L)
             if (total != null && total > 0 && initial >= total) {
                 // 上次已下完但没来得及改名（例如提交前崩溃）
                 commitDirectSingle(id, task, part, destDir, loc.finalName, total)
@@ -3500,6 +3604,119 @@ class DownloadManager(
         return start..end
     }
 
+    /** 百度原生 1 MiB 分片在校验、解密后落盘，再复用桌面合并和保存流程。 */
+    private suspend fun p2pDownload(
+        id: Long,
+        task: DownloadTaskEntity,
+        spec: BaiduP2pSpec,
+        headers: Map<String, String>
+    ) {
+        if (!isTaskActive()) return
+        val total = spec.fileSize
+        val range = BaiduConstants.P2P_RANGE_SIZE.toLong()
+        require(total > 0L && total <= Long.MAX_VALUE - range) { "百度 P2P 文件大小非法" }
+        val totalRanges = (total - 1L) / range + 1L
+        val workers = minOf(
+            threadsFor(task).coerceAtLeast(1),
+            baiduP2pWorkersProvider().coerceIn(1, 32),
+            totalRanges.coerceAtMost(32L).toInt()
+        )
+        val rawChunk = (total - 1L) / workers + 1L
+        var chunkSize = ((rawChunk - 1L) / range + 1L) * range
+        var chunkCount = ((total - 1L) / chunkSize + 1L).toInt()
+        val chunkDir = chunkDirOf(id).apply { mkdirs() }
+        val planFile = File(chunkDir, "plan.txt")
+        val identity = MessageDigest.getInstance("SHA-256")
+            .digest("${spec.fgid}|${spec.uid}|${spec.fsId}|${spec.path}".toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+        val storedPlan = planFile.takeIf { it.isFile }?.readText().orEmpty()
+        val storedTotal = PLAN_TOTAL.find(storedPlan)?.groupValues?.get(1)?.toLongOrNull()
+        val storedCount = PLAN_CHUNKS.find(storedPlan)?.groupValues?.get(1)?.toIntOrNull()
+        val storedSize = PLAN_P2P_CHUNK_SIZE.find(storedPlan)?.groupValues?.get(1)?.toLongOrNull()
+        if (storedPlan.startsWith("p2p ") && storedPlan.endsWith(" identity=$identity") &&
+            storedTotal == total && storedCount != null && storedCount in 1..32 &&
+            storedSize != null && storedSize > 0L && storedSize % range == 0L &&
+            (total - 1L) / storedSize + 1L == storedCount.toLong()
+        ) {
+            // 改线程数只调整实际并发，已有字节继续使用原区间。
+            chunkSize = storedSize
+            chunkCount = storedCount
+        }
+        val plan = "p2p chunks=$chunkCount total=$total chunkSize=$chunkSize identity=$identity"
+        if (storedPlan != plan) {
+            chunkDir.deleteRecursively()
+            check(chunkDir.mkdirs() || chunkDir.isDirectory) { "无法创建百度 P2P 分片目录" }
+        }
+        planFile.writeText(plan)
+        val parts = (0 until chunkCount).map { index ->
+            val start = index.toLong() * chunkSize
+            val expected = minOf(chunkSize, total - start)
+            File(chunkDir, "part_$index").also { part ->
+                val length = part.length()
+                val safeLength = when {
+                    length > expected -> expected
+                    length < expected -> length - length % range
+                    else -> length
+                }
+                if (length != safeLength) RandomAccessFile(part, "rw").use { it.setLength(safeLength) }
+            }
+        }
+        awaitCacheSpace(id, task, total)
+        val actualWorkers = minOf(workers, chunkCount)
+        val downloaded = AtomicLong(parts.sumOf { it.length() })
+        val initial = downloaded.get()
+        val lastPersistAt = AtomicLong(0L)
+        val speedRecorder = SpeedRecorder()
+        // 续传已有的字节是进度基线，不计入本轮瞬时速度。
+        speedRecorder.onBytes(initial)
+        dao.updateProgress(id, DownloadTaskEntity.STATUS_DOWNLOADING, initial, total)
+        _stats.update { it + (id to DownloadStats(0L, -1L, actualWorkers)) }
+        taskPartDigests[id] = ConcurrentHashMap()
+        DownloadDebugLog.record(
+            id, "百度 P2P",
+            "并发=$actualWorkers 分片数=$chunkCount 每片=$chunkSize 总大小=$total 已有=$initial"
+        )
+        if (initial < total) {
+            val downloaderP2p = baiduP2pDownloaderProvider()
+            val cookie = headers.entries.firstOrNull { it.key.equals("Cookie", true) }?.value.orEmpty()
+            val session = downloaderP2p.prepare(spec, cookie)
+            val localLimiter = Semaphore(actualWorkers)
+            val onProgress: suspend (Long) -> Unit = { delta ->
+                speedLimiter.awaitAllow(delta)
+                val progress = downloaded.addAndGet(delta).coerceAtMost(total)
+                speedRecorder.onBytes(progress)?.let { speed ->
+                    val remain = if (speed > 0L) (total - progress) * 1000L / speed else -1L
+                    _stats.update { it + (id to DownloadStats(speed, remain, actualWorkers)) }
+                }
+                persistProgressIfDue(id, progress, total, force = false, lastAt = lastPersistAt)
+                notifyProgress(id, task.fileName, progress, total)
+            }
+            coroutineScope {
+                parts.mapIndexed { index, part ->
+                    async(chunkIoDispatcher) {
+                        localLimiter.withPermit {
+                            inflightLimiter.withPermit {
+                                val start = index.toLong() * chunkSize
+                                val end = start + minOf(chunkSize, total - start) - 1L
+                                downloaderP2p.downloadRange(spec, session, start, end, part, onProgress)
+                            }
+                        }
+                    }
+                }.awaitAll()
+            }
+        }
+        if (!isTaskActive()) return
+        parts.forEachIndexed { index, part ->
+            val start = index.toLong() * chunkSize
+            val expected = minOf(chunkSize, total - start)
+            check(part.length() == expected) {
+                "百度 P2P 分片 ${index + 1}/$chunkCount 大小不符：期望 $expected，实际 ${part.length()}"
+            }
+        }
+        persistProgressIfDue(id, total, total, force = true, lastAt = lastPersistAt)
+        finishDownload(id, chunkDir, parts, task.fileName, total, effectiveSaveDir(task))
+    }
+
     /**
      * 分片流式合并 → **直接写入最终保存位置** → 校验通过后清空分片目录。
      *
@@ -3723,16 +3940,18 @@ class DownloadManager(
 
         /** 消耗 bytes 字节额度；不足则挂起等待（限速生效） */
         suspend fun awaitAllow(bytes: Long) {
-            val limit = speedLimitProvider().coerceAtLeast(0L)
-            if (limit <= 0L) return
-            while (true) {
+            var remaining = bytes.coerceAtLeast(0L)
+            while (remaining > 0L) {
+                val limit = speedLimitProvider().coerceAtLeast(0L)
+                if (limit <= 0L) return
                 val waitMs = synchronized(this) {
                     refill(limit)
-                    if (bytes <= tokens) {
-                        tokens -= bytes
-                        return
-                    }
-                    ((bytes - tokens) * 1000 / limit).coerceIn(1L, 200L)
+                    // 一次回调可能大于整个桶（百度 P2P 为 1 MiB），逐步消费才不会永久等待。
+                    val consumed = minOf(remaining, tokens)
+                    tokens -= consumed
+                    remaining -= consumed
+                    if (remaining == 0L) return
+                    (minOf(remaining, limit) * 1000.0 / limit).toLong().coerceIn(1L, 200L)
                 }
                 // 锁外挂起等待，避免持锁阻塞其他任务
                 delay(waitMs)

@@ -25,6 +25,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.yunx.app.data.network.BaiduP2pSpec
 import com.yunx.app.data.network.model.DownloadLink
 import com.yunx.app.ui.SnackbarController
 import com.yunx.app.ui.components.DownloadDirRow
@@ -49,6 +50,7 @@ fun DownloadLinkDialog(
     onChangeSaveDir: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
+    val isP2p = BaiduP2pSpec.isP2p(link.downloadUrl)
     FadeAlertDialog(
         visible = true,
         onDismissRequest = onDismiss,
@@ -63,12 +65,18 @@ fun DownloadLinkDialog(
         text = {
             Column {
                 Text(
-                    text = "下载直链已生成（有效期约 15-30 分钟）",
+                    text = if (isP2p) "百度 P2P 下载任务已生成" else "下载直链已生成（有效期约 15-30 分钟）",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(modifier = Modifier.height(8.dp))
-                Card(
+                if (isP2p) {
+                    Text(
+                        text = "此任务通过百度 P2P 节点下载，节点不可用时自动回退 CDN。仅下载，不上传或做种。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(
                         containerColor = MaterialTheme.colorScheme.surfaceContainerLow

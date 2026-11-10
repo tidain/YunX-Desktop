@@ -210,10 +210,10 @@ class BaiduCloudViewModel(
 
     // ---------- 单文件操作 ----------
 
-    /** 百度下载直链的请求头（Cookie 用于鉴权；UA 用浏览器 UA，CDN 不校验 UA） */
+    /** 取链与下载使用一致的 P2SP 客户端 UA。 */
     private fun downloadHeaders(cookie: String): Map<String, String> = mapOf(
         "Cookie" to cookie,
-        "User-Agent" to BaiduConstants.UA_WEB
+        "User-Agent" to BaiduConstants.UA_P2SP
     )
 
     /**
@@ -259,7 +259,12 @@ class BaiduCloudViewModel(
                     if (downloadCancelRequested) return@forEachIndexed
                     folderProgress = "正在加入下载 ${index + 1}/${tasks.size}"
                     runCatching {
-                        val link = api.locateDownload(file.fidToken, cookie)
+                        val link = api.locateDownload(
+                            path = file.fidToken,
+                            fsId = file.fid,
+                            cookie = cookie,
+                            fileSize = file.fsize
+                        )
                         downloadManager.enqueue(
                             url = link,
                             fileName = relPath, // 相对路径：Download/文件夹A/子目录/文件.mp4
@@ -301,17 +306,23 @@ class BaiduCloudViewModel(
         private set
 
     /** 下载文件：取直链 → 弹出下载确认弹窗（对齐解析页行为，确认后入队） */
-    fun downloadFile() = beginDownload("")
+    fun downloadFile(file: ShareFile? = actionFile) = beginDownload("", file)
 
     /** 下载到指定目录：单次覆盖保存目录，不改全局设置 */
-    fun downloadFileTo(saveDir: String) = beginDownload(saveDir)
+    fun downloadFileTo(saveDir: String, file: ShareFile? = actionFile) = beginDownload(saveDir, file)
 
-    private fun beginDownload(saveDir: String) {
-        val file = actionFile ?: return
+    private fun beginDownload(saveDir: String, target: ShareFile?) {
+        val file = target ?: return
         viewModelScope.launch {
             isOperating = true
             try {
-                val url = api.locateDownload(file.fidToken, cookie())
+                val credential = cookie()
+                val url = api.locateDownload(
+                    path = file.fidToken,
+                    fsId = file.fid,
+                    cookie = credential,
+                    fileSize = file.fsize
+                )
                 val link = DownloadLink(
                     fid = file.fidToken,
                     filename = file.fname,
@@ -324,10 +335,7 @@ class BaiduCloudViewModel(
                     fileName = file.fname,
                     size = file.fsize,
                     saveDir = saveDir,
-                    headers = mapOf(
-                        "Cookie" to cookie(),
-                        "User-Agent" to BaiduConstants.UA_WEB
-                    )
+                    headers = downloadHeaders(credential)
                 )
                 downloadLink = link // 弹下载确认弹窗（长按直链可复制）
             } catch (e: Exception) {
@@ -517,7 +525,12 @@ class BaiduCloudViewModel(
                     if (downloadCancelRequested) return@forEachIndexed
                     folderProgress = "正在加入下载 ${index + 1}/${tasks.size}"
                     runCatching {
-                        val link = api.locateDownload(file.fidToken, cookie)
+                        val link = api.locateDownload(
+                            path = file.fidToken,
+                            fsId = file.fid,
+                            cookie = cookie,
+                            fileSize = file.fsize
+                        )
                         downloadManager.enqueue(
                             url = link,
                             fileName = if (relPath.contains('/')) relPath else file.fname,

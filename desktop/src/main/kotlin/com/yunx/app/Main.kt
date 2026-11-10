@@ -131,13 +131,7 @@ fun main(args: Array<String>) {
     }
 
     // 启动优化：JCEF（内嵌 Chromium）初始化耗时数秒、首次运行解包 200MB 更久，
-    // 若在主线程同步初始化会阻塞窗口显示。Windows/Linux 下改为窗口显示后后台初始化
-    // （CEF 消息循环由 CefApp 内部 Swing Timer 在 AWT EDT 泵动，与初始化线程无关）。
-    // macOS 受 AppKit 主线程约束，保持阻塞式初始化。
-    val isMac = System.getProperty("os.name", "").lowercase().contains("mac")
-    if (isMac) {
-        JcefHolder.initBlocking()
-    }
+    // 统一在窗口显示后后台初始化（见下方 Window 内的 LaunchedEffect），避免首次启动长时间无窗口。
 
     // 进程退出前：先把 WAL 落回主库（否则数据只留在 -wal 里，异常退出后可能整库丢失），
     // 再尽力释放 JCEF
@@ -298,6 +292,12 @@ fun main(args: Array<String>) {
                                     else exitApplication()
                                 }
                             }
+                        },
+                        onExit = {
+                            saveWindowPosition(mainWindow)
+                            val w = mainWindow
+                            if (w != null) WindowFx.fadeOutThen(w) { exitApplication() }
+                            else exitApplication()
                         }
                     )
                 }

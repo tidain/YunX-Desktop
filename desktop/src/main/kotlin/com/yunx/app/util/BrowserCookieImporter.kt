@@ -45,6 +45,19 @@ object BrowserCookieImporter {
 
     /** 发现本机已安装浏览器的 Cookie 库目录（存在 cookies 文件才算） */
     fun discoverBrowsers(): List<BrowserInfo> {
+        val osName = System.getProperty("os.name", "").lowercase()
+        if (osName.contains("mac") || osName.contains("darwin")) {
+            val home = File(System.getProperty("user.home", ""))
+            val ffRoot = File(home, "Library/Application Support/Firefox/Profiles")
+            if (ffRoot.isDirectory) {
+                val profiles = ffRoot.listFiles { f -> f.isDirectory && File(f, "cookies.sqlite").exists() }
+                    ?.toList() ?: emptyList()
+                if (profiles.isNotEmpty()) {
+                    return listOf(BrowserInfo("firefox", "Firefox", Kind.FIREFOX, profiles))
+                }
+            }
+            return emptyList()
+        }
         val local = System.getenv("LOCALAPPDATA")?.let { File(it) } ?: return emptyList()
         val roaming = System.getenv("APPDATA")?.let { File(it) } ?: return emptyList()
         val out = mutableListOf<BrowserInfo>()

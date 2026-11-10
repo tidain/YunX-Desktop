@@ -50,10 +50,12 @@ object FfplayManager {
 
     private const val TAG = "YunX-Ffplay"
 
-    private const val EXE_NAME = "ffplay.exe"
+    private val EXE_NAME: String
+        get() = if (isWindows()) "ffplay.exe" else "ffplay"
 
     /** DASH 合轨用到的可执行文件（与 ffplay 同包，一起解出来） */
-    private const val FFMPEG_EXE = "ffmpeg.exe"
+    private val FFMPEG_EXE: String
+        get() = if (isWindows()) "ffmpeg.exe" else "ffmpeg"
 
     /** ffplay 默认 UA 是 `Lavf/...`，很多平台的 CDN 会因此 403，缺省补一个 Chrome UA */
     private const val DEFAULT_UA =
@@ -136,6 +138,9 @@ object FfplayManager {
             add(File(it, "Programs/ffmpeg/bin"))
         }
         add(File("C:/ffmpeg/bin"))
+        add(File("/opt/homebrew/bin"))
+        add(File("/usr/local/bin"))
+        add(File("/usr/bin"))
     }
 
     @Volatile
@@ -154,11 +159,9 @@ object FfplayManager {
 
     /**
      * 定位可用的 ffplay（结果带缓存）。顺序：私有目录 → PATH → 常见安装目录。
-     * 非 Windows 直接返回 null（ffplay 嵌入方案仅 Windows 生效）。
      */
     @Synchronized
     fun locate(forceRefresh: Boolean = false): File? {
-        if (!isWindows()) return null
         if (!forceRefresh && checked) return cached
         val found = detectExe(EXE_NAME, privateExe)
         cached = found
@@ -168,11 +171,9 @@ object FfplayManager {
 
     /**
      * 定位可用的 ffmpeg（结果带缓存），供 DASH 合轨使用。顺序同 [locate]。
-     * 非 Windows 返回 null（当前合轨兜底为纯 Java 实现，不受平台限制）。
      */
     @Synchronized
     fun locateFfmpeg(forceRefresh: Boolean = false): File? {
-        if (!isWindows()) return null
         if (!forceRefresh && checkedFfmpeg) return cachedFfmpeg
         val found = detectExe(FFMPEG_EXE, privateFfmpeg)
         cachedFfmpeg = found

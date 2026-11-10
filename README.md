@@ -159,6 +159,9 @@ cd YunX-Desktop
 .\run.ps1 installer  # 单文件安装程序 → release\YunX-Desktop-setup-*.exe
 ```
 
+**macOS（实验性）**：`./run-mac.sh run` 启动，`./run-mac.sh app` / `dmg` 打包，需 JDK 17+（打包请用非 Homebrew 发行版）。
+平台差异与尚未支持的功能见 [构建与打包 · macOS](docs/BUILD.md#macos实验性)。
+
 环境要求、版本号管理与打包产物见 **[构建与打包](docs/BUILD.md)**。
 
 ## 常见问题

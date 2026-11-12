@@ -11,6 +11,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.ScrollbarStyle
 import androidx.compose.foundation.VerticalScrollbar
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -26,11 +27,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.CornerSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -72,10 +73,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
@@ -90,7 +93,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.yunx.app.data.db.DownloadTaskEntity
-import com.yunx.app.data.download.DownloadGrouping
+import com.yunx.app.data.download.DownloadListLayout
+import com.yunx.app.data.download.DownloadListRow
 import com.yunx.app.data.download.DownloadPlatform
 import com.yunx.app.data.download.DownloadSaver
 import com.yunx.app.data.download.DownloadStats
@@ -126,6 +130,13 @@ fun DownloadScreen(
     var showAddDialog by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<DownloadTaskEntity?>(null) }
     var showDeleteAllConfirm by remember { mutableStateOf(false) }
+    // 文件夹组折叠状态：只记录用户收起的组，默认全部展开；切 Tab 重建后仍保留
+    var collapsedGroupIds by rememberSaveable(
+        stateSaver = listSaver<Set<String>, String>(
+            save = { it.toList() },
+            restore = { it.toSet() }
+        )
+    ) { mutableStateOf(emptySet()) }
     // 下载调试页（设置 → 开发调试 → 下载调试 打开后才有入口）：整页替换任务列表，在「下载」Tab 内展开
     var debugTaskId by remember { mutableStateOf<Long?>(null) }
     val downloadDebug = ThemeController.downloadDebug
@@ -182,58 +193,69 @@ fun DownloadScreen(
                         .weight(1f)
                         .fillMaxWidth()
                 ) {
+                    // 分组/排序只在任务列表变化时计算；stats 进度高频刷新不重复 O(n log n)
+                    val downloadDirUri = settingsRepo.downloadDirUri
+                    val globalSaveRoot = remember(downloadDirUri) {
+                        DownloadSaver.resolveSaveDir(downloadDirUri).absolutePath
+                    }
+                    val rows = remember(tasks, globalSaveRoot, collapsedGroupIds) {
+                        DownloadListLayout.rows(tasks, globalSaveRoot, collapsedGroupIds)
+                    }
                     LazyColumn(
                         state = listState,
                         modifier = Modifier
                             .fillMaxSize()
                             .nestedScroll(scrollBehavior.nestedScrollConnection),
-                        contentPadding = PaddingValues(start = 16.dp, end = 24.dp, top = 8.dp, bottom = 96.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                        contentPadding = PaddingValues(start = 16.dp, end = 24.dp, top = 8.dp, bottom = 96.dp)
                     ) {
-                        // 根目录任务（无相对路径）单独显示；下载失败的排到最上方（其余保持原有顺序）
-                        val rootTasks = tasks.filter { !it.fileName.contains('/') }
-                            .sortedBy { if (it.status == DownloadTaskEntity.STATUS_FAILED) 0 else 1 }
-                        // 文件夹下载任务：按「保存根目录 + 顶级目录」分组。
-                        // 只看文件夹名会把“同一个文件夹下载到两个不同位置”的任务错误合并，
-                        // 展开后每个文件出现两条记录；Gopeed/内置下载器共用这套分组。
-                        val globalSaveRoot = DownloadSaver.resolveSaveDir(settingsRepo.downloadDirUri).absolutePath
-                        // 含下载失败子任务的文件夹整体排到最上方（其余保持原有分组顺序）
-                        val folderGroups = tasks.filter { it.fileName.contains('/') }
-                            .groupBy { DownloadGrouping.groupKey(it, globalSaveRoot) }
-                            .entries
-                            .sortedBy { entry ->
-                                if (entry.value.any { it.status == DownloadTaskEntity.STATUS_FAILED }) 0 else 1
-                            }
+                        rows.forEach { row ->
+                            when (row) {
+                                is DownloadListRow.RootTask -> item(key = row.key) {
+                                    DownloadTaskCard(
+                                        modifier = animateItemIfAllowed().padding(bottom = 10.dp),
+                                        task = row.task,
+                                        stats = stats[row.task.id],
+                                        onPause = { viewModel.pause(row.task.id) },
+                                        onResume = { viewModel.resume(row.task.id) },
+                                        onRemove = { pendingDelete = row.task },
+                                        onRedownload = { viewModel.redownload(row.task) },
+                                        onDebug = openDebug?.let { cb -> { cb(row.task) } }
+                                    )
+                                }
 
-                        items(rootTasks, key = { it.id }) { task ->
-                            DownloadTaskCard(
-                                modifier = animateItemIfAllowed(),
-                                task = task,
-                                stats = stats[task.id],
-                                onPause = { viewModel.pause(task.id) },
-                                onResume = { viewModel.resume(task.id) },
-                                onRemove = { pendingDelete = task },
-                                onRedownload = { viewModel.redownload(task) },
-                                onDebug = openDebug?.let { cb -> { cb(task) } }
-                            )
-                        }
+                                is DownloadListRow.FolderHeader -> item(key = row.key) {
+                                    FolderDownloadGroupHeader(
+                                        modifier = animateItemIfAllowed()
+                                            .padding(bottom = if (row.expanded) 0.dp else 10.dp),
+                                        folder = row.folder,
+                                        saveRoot = row.saveRoot,
+                                        tasks = row.tasks,
+                                        stats = stats,
+                                        expanded = row.expanded,
+                                        onToggleExpanded = {
+                                            collapsedGroupIds = if (row.expanded) {
+                                                collapsedGroupIds + row.groupId
+                                            } else {
+                                                collapsedGroupIds - row.groupId
+                                            }
+                                        }
+                                    )
+                                }
 
-                        folderGroups.forEach { (groupKey, groupTasks) ->
-                            val folder = groupKey.second
-                            val saveRoot = DownloadGrouping.folderSaveRoot(groupTasks.first(), globalSaveRoot)
-                            item(key = "folder_${groupKey.first}_$folder") {
-                                FolderDownloadGroup(
-                                    modifier = animateItemIfAllowed(),
-                                    folder = folder,
-                                    saveRoot = saveRoot,
-                                    tasks = groupTasks,
-                                    stats = stats,
-                                    onPause = { viewModel.pause(it) },
-                                    onResume = { viewModel.resume(it) },
-                                    onRemove = { pendingDelete = it },
-                                    onRedownload = { viewModel.redownload(it) },
-                                    onDebug = openDebug
-                                )
+                                is DownloadListRow.FolderChild -> item(key = row.key) {
+                                    FolderDownloadChildRow(
+                                        modifier = animateItemIfAllowed(),
+                                        task = row.task,
+                                        stats = stats[row.task.id],
+                                        first = row.first,
+                                        last = row.last,
+                                        onPause = { viewModel.pause(row.task.id) },
+                                        onResume = { viewModel.resume(row.task.id) },
+                                        onRemove = { pendingDelete = row.task },
+                                        onRedownload = { viewModel.redownload(row.task) },
+                                        onDebug = openDebug?.let { cb -> { cb(row.task) } }
+                                    )
+                                }
                             }
                         }
                     }
@@ -553,39 +575,44 @@ private fun EmptyDownloadState(modifier: Modifier = Modifier) {
 }
 
 /**
- * 文件夹下载组：同一「顶级目录」下的所有任务合并为一个可展开卡片。
- * 收起时显示文件夹名 + 统计 + 总体进度；展开后显示子任务（含子文件夹内文件）紧凑列表。
+ * 文件夹下载组表头：同一「顶级目录」下的任务共用一张卡片。
+ * 子任务由外层 LazyColumn 作为独立 item 懒加载，表头只负责统计与展开/收起。
  */
 @Composable
-private fun FolderDownloadGroup(
+private fun FolderDownloadGroupHeader(
     modifier: Modifier = Modifier,
     folder: String,
     /** 该组的保存根目录（用于区分“同名文件夹下载到不同位置”的多组任务） */
     saveRoot: String,
     tasks: List<DownloadTaskEntity>,
     stats: Map<Long, DownloadStats>,
-    onPause: (Long) -> Unit,
-    onResume: (Long) -> Unit,
-    onRemove: (DownloadTaskEntity) -> Unit,
-    onRedownload: (DownloadTaskEntity) -> Unit,
-    onDebug: ((DownloadTaskEntity) -> Unit)? = null
+    expanded: Boolean,
+    onToggleExpanded: () -> Unit
 ) {
-    // ★ 用 rememberSaveable（而非 remember）：切到别的 Tab 再切回来时，
-    //   下载页组合会被重建，remember 会让折叠状态复位成「展开」。
-    // ★ 折叠状态按「保存根目录 + 文件夹名」分别保存：同名文件夹下载到不同位置时互不影响
-    var expanded by rememberSaveable(folder, saveRoot) { mutableStateOf(true) }
-    val completed = tasks.count { it.status == DownloadTaskEntity.STATUS_COMPLETED }
-    val totalSize = tasks.sumOf { it.totalSize }
+    // 进度聚合只在任务列表变化时重算（stats 高频刷新不重复 O(n) 求和）
+    val completed = remember(tasks) {
+        tasks.count { it.status == DownloadTaskEntity.STATUS_COMPLETED }
+    }
+    val totalSize = remember(tasks) { tasks.sumOf { it.totalSize } }
     // 聚合显示钳制：任何单项竞态残留都不会让"已下载 > 总大小"
-    val downloaded = minOf(tasks.sumOf { it.downloadedSize }, totalSize)
+    val downloaded = remember(tasks, totalSize) {
+        minOf(tasks.sumOf { it.downloadedSize }, totalSize)
+    }
     val fraction = if (totalSize > 0) {
         (downloaded.toFloat() / totalSize).coerceIn(0f, 1f)
     } else 0f
     val done = completed == tasks.size
+    // 展开时去掉底部圆角，与下方子任务拼成同一张卡片
+    val expandedShape = RoundedCornerShape(
+        topStart = MaterialTheme.shapes.large.topStart,
+        topEnd = MaterialTheme.shapes.large.topEnd,
+        bottomStart = CornerSize(0.dp),
+        bottomEnd = CornerSize(0.dp)
+    )
 
     Card(
         modifier = modifier.fillMaxWidth(),
-        shape = MaterialTheme.shapes.large,
+        shape = if (expanded) expandedShape else MaterialTheme.shapes.large,
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainerLow
         )
@@ -595,7 +622,7 @@ private fun FolderDownloadGroup(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { expanded = !expanded }
+                    .clickable(onClick = onToggleExpanded)
                     .padding(start = 14.dp, end = 10.dp, top = 12.dp, bottom = 10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -672,47 +699,70 @@ private fun FolderDownloadGroup(
                 )
             }
 
-            // 展开区：总体进度条 + 子任务紧凑列表
-            AnimatedVisibility(
-                visible = expanded,
-                enter = fadeIn(tween(200)) + expandVertically(tween(200), expandFrom = Alignment.Top),
-                exit = fadeOut(tween(150)) + shrinkVertically(tween(150), shrinkTowards = Alignment.Top)
-            ) {
-                Column {
-                    // 总体进度条（已完成时隐藏）
-                    if (!done) {
-                        LinearProgressIndicator(
-                            progress = { fraction },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 14.dp),
-                            color = MaterialTheme.colorScheme.primary,
-                            trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
-                        )
-                    }
-                    // 子任务列表（紧凑行，含子文件夹内文件）；下载失败的子任务置顶（其余保持原有顺序）
-                    val orderedTasks = tasks.sortedBy {
-                        if (it.status == DownloadTaskEntity.STATUS_FAILED) 0 else 1
-                    }
-                    Column(
-                        modifier = Modifier.padding(10.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        orderedTasks.forEach { task ->
-                            DownloadSubTaskRow(
-                                task = task,
-                                stats = stats[task.id],
-                                onPause = { onPause(task.id) },
-                                onResume = { onResume(task.id) },
-                                onRemove = { onRemove(task) },
-                                onRedownload = { onRedownload(task) },
-                                onDebug = onDebug?.let { cb -> { cb(task) } }
-                            )
-                        }
-                    }
-                }
+            // 总体进度条（已完成时隐藏）
+            if (expanded && !done) {
+                LinearProgressIndicator(
+                    progress = { fraction },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp),
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
+                )
             }
         }
+    }
+}
+
+/**
+ * 文件夹组内单个子任务的懒加载容器：与表头拼成同一张卡片。
+ * 超过可视区域的子任务不会被组合，展开上千文件的文件夹时不再一次性构建全部行。
+ */
+@Composable
+private fun FolderDownloadChildRow(
+    modifier: Modifier = Modifier,
+    task: DownloadTaskEntity,
+    stats: DownloadStats?,
+    first: Boolean,
+    last: Boolean,
+    onPause: () -> Unit,
+    onResume: () -> Unit,
+    onRemove: () -> Unit,
+    onRedownload: () -> Unit,
+    onDebug: (() -> Unit)? = null
+) {
+    val bottomShape = if (last) {
+        RoundedCornerShape(
+            topStart = CornerSize(0.dp),
+            topEnd = CornerSize(0.dp),
+            bottomStart = MaterialTheme.shapes.large.bottomStart,
+            bottomEnd = MaterialTheme.shapes.large.bottomEnd
+        )
+    } else {
+        RectangleShape
+    }
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            // 组间距放在卡片背景之外，保持卡片底部与下一组之间的呼吸感
+            .padding(bottom = if (last) 10.dp else 0.dp)
+            .background(MaterialTheme.colorScheme.surfaceContainerLow, bottomShape)
+            .padding(
+                start = 10.dp,
+                end = 10.dp,
+                top = if (first) 10.dp else 4.dp,
+                bottom = if (last) 10.dp else 4.dp
+            )
+    ) {
+        DownloadSubTaskRow(
+            task = task,
+            stats = stats,
+            onPause = onPause,
+            onResume = onResume,
+            onRemove = onRemove,
+            onRedownload = onRedownload,
+            onDebug = onDebug
+        )
     }
 }
 

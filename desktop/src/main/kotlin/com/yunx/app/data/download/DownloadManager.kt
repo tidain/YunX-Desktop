@@ -82,6 +82,8 @@ data class DownloadStats(
 
 private const val TAG = "YunX-DL"
 
+private const val HEX_DIGITS = "0123456789ABCDEF"
+
 /**
  * 单个「在飞分片」的调试快照（下载调试页用）。
  * 一路在飞分片就对应一个正在干活的 worker，所以这张表就是「每个线程此刻在干什么」。
@@ -1659,12 +1661,41 @@ class DownloadManager(
 
     // ---------- 内部实现 ----------
 
+    /**
+     * HTTP 头值只允许可见 ASCII（0x20..0x7E），OkHttp 的 Headers 校验遇到中文等非 ASCII 字符会直接抛
+     * IllegalArgumentException（"Unexpected char 0x4e2d ... in Cookie value"）。浏览器插件把页面 Cookie
+     * 原样带回时可能含未按 RFC 6265 编码的非 ASCII，这里按 UTF-8 百分号编码后再用，信息不丢失且能通过校验。
+     */
+    private fun sanitizeHeaderValue(value: String): String {
+        if (value.all { it.code in 0x20..0x7E }) return value
+        val sb = StringBuilder(value.length + 16)
+        var i = 0
+        while (i < value.length) {
+            val cp = value.codePointAt(i)
+            if (cp in 0x20..0x7E) {
+                sb.append(cp.toChar())
+            } else {
+                String(Character.toChars(cp)).toByteArray(Charsets.UTF_8).forEach { b ->
+                    val v = b.toInt() and 0xFF
+                    sb.append('%').append(HEX_DIGITS[v shr 4]).append(HEX_DIGITS[v and 0xF])
+                }
+            }
+            i += Character.charCount(cp)
+        }
+        return sb.toString()
+    }
+
+    private fun sanitizeHeaders(headers: Map<String, String>): Map<String, String> =
+        if (headers.isEmpty()) headers else headers.mapValues { (_, v) -> sanitizeHeaderValue(v) }
+
     /** 请求头落库：整体按 [key] 加密（下载主链用 `download.requestHeaders`，DASH 音轨用 `download.mergeAudioHeaders`） */
     private fun encodeHeaders(
         headers: Map<String, String>,
         key: String = "download.requestHeaders"
     ): String {
-        val json = JSONObject().apply { headers.forEach { (name, value) -> put(name, value) } }.toString()
+        val json = JSONObject().apply {
+            sanitizeHeaders(headers).forEach { (name, value) -> put(name, value) }
+        }.toString()
         return credentialCipher.encrypt(json, key)
     }
 
@@ -1682,7 +1713,9 @@ class DownloadManager(
                     put("url", source.url)
                     put(
                         "headers",
-                        JSONObject().apply { source.headers.forEach { (name, value) -> put(name, value) } }
+                        JSONObject().apply {
+                            sanitizeHeaders(source.headers).forEach { (name, value) -> put(name, value) }
+                        }
                     )
                 }
             )
@@ -1707,7 +1740,9 @@ class DownloadManager(
                     if (url.isBlank()) continue
                     val headersJson = obj.optJSONObject("headers")
                     val headers = buildMap {
-                        headersJson?.keys()?.forEach { name -> put(name, headersJson.getString(name)) }
+                        headersJson?.keys()?.forEach { name ->
+                            put(name, sanitizeHeaderValue(headersJson.getString(name)))
+                        }
                     }
                     add(DownloadSource(url, headers))
                 }
@@ -1725,7 +1760,7 @@ class DownloadManager(
             val jsonText = credentialCipher.decrypt(stored, "download.requestHeaders")
             val json = JSONObject(jsonText)
             buildMap {
-                json.keys().forEach { name -> put(name, json.getString(name)) }
+                json.keys().forEach { name -> put(name, sanitizeHeaderValue(json.getString(name))) }
             }.also {
                 if (!credentialCipher.isEncrypted(stored)) {
                     dao.updateRequestHeaders(id, encodeHeaders(it))
@@ -1750,7 +1785,9 @@ class DownloadManager(
         if (stored.isBlank()) return emptyMap()
         return runCatching {
             val json = JSONObject(credentialCipher.decrypt(stored, "download.mergeAudioHeaders"))
-            buildMap { json.keys().forEach { name -> put(name, json.getString(name)) } }
+            buildMap {
+                json.keys().forEach { name -> put(name, sanitizeHeaderValue(json.getString(name))) }
+            }
         }.getOrElse {
             Log.w(TAG, "loadPersistedMergeAudioHeaders: 解密失败，本次音轨不带请求头：${it.message}")
             emptyMap()

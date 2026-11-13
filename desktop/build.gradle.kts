@@ -160,6 +160,7 @@ tasks.register<JavaExec>("testInProcess") {
         "com.yunx.app.data.download.ElasticAllocatorTest",
         "com.yunx.app.data.download.DownloadPathPolicyTest",
         "com.yunx.app.data.download.DownloadGroupingTest",
+        "com.yunx.app.data.download.DownloadListLayoutTest",
         "com.yunx.app.data.download.DirectPartManifestTest",
         "com.yunx.app.data.download.DownloadSaverTest",
         "com.yunx.app.data.download.ChunkDownloaderDirectTest",
@@ -170,7 +171,8 @@ tasks.register<JavaExec>("testInProcess") {
         "com.yunx.app.data.security.DbKeyStoreTest",
         "com.yunx.app.ui.login.XunleiVerificationPolicyTest",
         "com.yunx.app.data.network.XunleiWebCredentialTest",
-        "com.yunx.app.util.LogRedactorTest"
+        "com.yunx.app.util.LogRedactorTest",
+        "com.yunx.app.ui.viewmodel.BaiduCloudDownloadHeadersTest"
     )
 }
 

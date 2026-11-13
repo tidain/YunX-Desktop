@@ -35,6 +35,16 @@ sealed interface BaiduCloudUiState {
 }
 
 /**
+ * 网盘页下载百度直链的请求头。
+ * 百度 CDN 直链的签名与取链（locatedownload）时的客户端 UA 绑定，
+ * 必须与 [BaiduApi.locateDownload] 一致使用 UA_NETDISK，否则返回 403 sign error。
+ */
+internal fun baiduCloudDownloadHeaders(cookie: String): Map<String, String> = mapOf(
+    "Cookie" to cookie,
+    "User-Agent" to BaiduConstants.UA_NETDISK
+)
+
+/**
  * 百度网盘云盘浏览 ViewModel（参考夸克/UC/迅雷云盘）：
  * - 目录浏览（根/子目录/面包屑回退）+ 下拉刷新
  * - 文件操作：下载 / 重命名 / 移动 / 创建分享 / 删除 + 长按多选批量
@@ -210,12 +220,6 @@ class BaiduCloudViewModel(
 
     // ---------- 单文件操作 ----------
 
-    /** 百度下载直链的请求头（Cookie 用于鉴权；UA 用浏览器 UA，CDN 不校验 UA） */
-    private fun downloadHeaders(cookie: String): Map<String, String> = mapOf(
-        "Cookie" to cookie,
-        "User-Agent" to BaiduConstants.UA_WEB
-    )
-
     /**
      * 递归收集文件夹内所有文件（保持目录结构）。
      * 百度目录用绝对路径（dirPath），文件夹路径在 fidToken 字段。
@@ -265,7 +269,7 @@ class BaiduCloudViewModel(
                             fileName = relPath, // 相对路径：Download/文件夹A/子目录/文件.mp4
                             size = file.fsize,
                             platform = DownloadPlatform.BAIDU,
-                            headers = downloadHeaders(cookie),
+                            headers = baiduCloudDownloadHeaders(cookie),
                             saveDir = saveDir
                         )
                         okCount++
@@ -311,7 +315,8 @@ class BaiduCloudViewModel(
         viewModelScope.launch {
             isOperating = true
             try {
-                val url = api.locateDownload(file.fidToken, cookie())
+                val cookie = cookie()
+                val url = api.locateDownload(file.fidToken, cookie)
                 val link = DownloadLink(
                     fid = file.fidToken,
                     filename = file.fname,
@@ -324,10 +329,7 @@ class BaiduCloudViewModel(
                     fileName = file.fname,
                     size = file.fsize,
                     saveDir = saveDir,
-                    headers = mapOf(
-                        "Cookie" to cookie(),
-                        "User-Agent" to BaiduConstants.UA_WEB
-                    )
+                    headers = baiduCloudDownloadHeaders(cookie)
                 )
                 downloadLink = link // 弹下载确认弹窗（长按直链可复制）
             } catch (e: Exception) {
@@ -523,7 +525,7 @@ class BaiduCloudViewModel(
                             fileName = if (relPath.contains('/')) relPath else file.fname,
                             size = file.fsize,
                             platform = DownloadPlatform.BAIDU,
-                            headers = downloadHeaders(cookie),
+                            headers = baiduCloudDownloadHeaders(cookie),
                             saveDir = saveDir
                         )
                         okCount++

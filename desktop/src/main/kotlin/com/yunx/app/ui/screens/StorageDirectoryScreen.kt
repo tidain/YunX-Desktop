@@ -273,10 +273,12 @@ fun StorageSettingsPanel(
             SnackbarController.show("已切回当前生效目录（无需搬迁）")
             return
         }
+        // ★ 缓存目标也要校验：盘符根 / 用户主目录 / 装满用户资料的目录一律拒绝，
+        //   否则「把缓存搬过去」等于把用户文件卷进缓存树（旧版本还会在下次启动把它们删掉）
         val reason = if (kind == StorageKind.DB) {
             StorageMigrator.checkDatabaseTarget(target)
         } else {
-            StorageMigrator.checkWritable(target)
+            StorageMigrator.checkCacheTarget(target)
         }
         if (reason != null) {
             errorText = reason
@@ -298,10 +300,14 @@ fun StorageSettingsPanel(
                     } else {
                         StorageMigrator.migrateDatabase(req.source, req.target)
                     }
-                    if (req.kind == StorageKind.CACHE) {
-                        StorageMigrator.rememberCleanupForCache(req.source)
-                    } else {
-                        StorageMigrator.rememberCleanupForDatabase(req.source)
+                    // ★ 有文件没拷过去（被 JCEF / 下载线程占用、读不到）时不能登记「下次启动清理旧目录」：
+                    //   旧目录里被跳过的那份是唯一副本，删掉就真丢了。宁可留下旧数据等手动处理。
+                    if (report.skipped.isEmpty()) {
+                        if (req.kind == StorageKind.CACHE) {
+                            StorageMigrator.rememberCleanupForCache(req.source)
+                        } else {
+                            StorageMigrator.rememberCleanupForDatabase(req.source)
+                        }
                     }
                     report
                 }
@@ -313,6 +319,9 @@ fun StorageSettingsPanel(
                     val notes = buildList {
                         if (report.selfHealingEntries > 0) add("内嵌浏览器数据将在启动时重建")
                         if (report.skippedCount > 0) add("${report.skippedCount} 个文件被占用已跳过")
+                        if (report.skippedCount > 0) add("旧目录已保留、暂不清理")
+                        // 旧缓存目录里混着的用户文件既没搬也没删，明确告诉用户它们还在原处
+                        if (report.foreignEntries > 0) add("旧目录里 ${report.foreignEntries} 个非云析条目未动、仍在原处")
                     }
                     val noteText = if (notes.isEmpty()) "" else "（${notes.joinToString("；")}）"
                     resultText = "已搬迁 ${report.copiedFiles} 个文件（${formatBytes(report.copiedBytes)}）$noteText\n" +
@@ -574,8 +583,10 @@ fun StorageSettingsPanel(
                             }
                         } else {
                             append(
-                                "搬迁完成后需要重启应用才会生效。内嵌浏览器的解包文件（约 200MB）不搬、" +
-                                    "会由它在启动时自动重建；网页版登录态会保留。旧目录会在下次启动时删除。"
+                                "搬迁只涉及云析自己的缓存条目（下载分片、合并临时文件、浏览器数据）；" +
+                                    "旧目录里若混有你的其它文件，不会被搬走、也不会被删除，会原样留在原处。\n\n" +
+                                    "搬迁完成后需要重启应用才会生效。内嵌浏览器的解包文件（约 200MB）不搬、" +
+                                    "会由它在启动时自动重建；网页版登录态会保留。旧目录里属于云析的缓存条目会在下次启动时清理。"
                             )
                         }
                     }

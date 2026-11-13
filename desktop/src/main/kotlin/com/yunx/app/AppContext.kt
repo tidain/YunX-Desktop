@@ -133,29 +133,41 @@ object AppContext {
                 }
             }
 
-            // ---- 旧缓存位置：下载分片 / JCEF 浏览器数据（含登录态 cookie），整棵删除 ----
+            // ---- 旧缓存位置：下载分片 / JCEF 浏览器数据（含登录态 cookie） ----
+            // ★ 绝不整棵删除：旧目录可能被设成过盘符根 / 用户目录 / 混着用户资料的文件夹，
+            //   只删属于本应用的顶层条目，其余文件（包括用户搬迁后手动放回的文件）原样保留。
             val oldCacheRaw = miscPrefs.get(KEY_CACHE_MIGRATED_FROM, null)?.trim().orEmpty()
             if (oldCacheRaw.isNotEmpty()) {
                 val oldDir = File(oldCacheRaw)
                 val newReady = cacheDir.isDirectory && cacheDir.listFiles()?.isNotEmpty() == true
                 when {
                     sameDir(oldDir, cacheDir) -> miscPrefs.remove(KEY_CACHE_MIGRATED_FROM)
-                    // ★ 仅当新缓存目录确已就位、且旧目录确实是本应用独占的缓存目录时才删，
-                    //   避免把唯一一份数据删掉 —— 也避免删掉盘符根 / 新目录的祖先（那是整块盘）
-                    oldDir.isDirectory && newReady && canDeleteOldCacheDir(oldDir) -> {
-                        if (oldDir.deleteRecursively()) {
-                            Log.i("YunX-DataDir", "已清理迁移后的旧缓存目录：${oldDir.absolutePath}")
-                            miscPrefs.remove(KEY_CACHE_MIGRATED_FROM)
-                        }
-                        // 删除失败（文件被占用）：保留标记，下次启动再试
-                    }
-                    oldDir.isDirectory && newReady -> {
-                        // 旧位置是盘符根 / 新目录的祖先 / 混着用户自己的文件：宁可留着旧缓存，
-                        // 也绝不整棵递归删除（曾经把用户整个盘清空的正是这里）
-                        Log.w("YunX-DataDir", "旧缓存目录不适合整棵删除，已跳过：${oldDir.absolutePath}")
+                    // 旧目录已经不在了（用户手动移走 / 删除）：标记作废，不需要再清
+                    !oldDir.isDirectory -> miscPrefs.remove(KEY_CACHE_MIGRATED_FROM)
+                    // 新位置还没就位：保留标记，下次启动再试
+                    !newReady -> Log.i("YunX-DataDir", "新缓存目录尚未就位，旧目录清理推迟到下次启动")
+                    // ★ 旧位置是盘符根 / 受保护目录的祖先：一个文件都不删（曾经把用户整个盘清空的正是这里）
+                    !StorageMigrator.isSafeToCleanOldCacheDir(oldDir, protectedStorageDirs()) -> {
+                        Log.w("YunX-DataDir", "旧缓存目录不适合清理（盘符根或受保护目录的祖先），已跳过：${oldDir.absolutePath}")
                         miscPrefs.remove(KEY_CACHE_MIGRATED_FROM)
                     }
-                    // 新位置还没就位：保留标记，下次启动再试
+                    else -> {
+                        val result = StorageMigrator.cleanupOldCacheDir(oldDir)
+                        if (result.notAppCacheDir) {
+                            // 旧目录里连一个云析缓存的强特征都没有（可能只是用户自己的普通文件夹）：绝不删除
+                            Log.w("YunX-DataDir", "旧位置不像云析缓存目录，未做任何删除：${oldDir.absolutePath}")
+                            miscPrefs.remove(KEY_CACHE_MIGRATED_FROM)
+                        } else {
+                            if (result.deletedEntries.isNotEmpty()) {
+                                Log.i("YunX-DataDir", "已清理迁移后的旧缓存条目（${result.deletedEntries.size} 项）：${oldDir.absolutePath}")
+                            }
+                            if (result.keptForeignEntries.isNotEmpty()) {
+                                Log.i("YunX-DataDir", "旧缓存目录里的 ${result.keptForeignEntries.size} 个非云析条目已原样保留：${oldDir.absolutePath}")
+                            }
+                            // 没删干净（文件仍被占用）：保留标记，下次启动继续尝试
+                            if (!result.hasPending) miscPrefs.remove(KEY_CACHE_MIGRATED_FROM)
+                        }
+                    }
                 }
             }
         }.onFailure { Log.w("YunX-DataDir", "清理迁移残留失败：${it.message}") }
@@ -165,33 +177,27 @@ object AppContext {
     private fun sameDir(a: File, b: File): Boolean =
         runCatching { a.canonicalPath == b.canonicalPath }.getOrDefault(a.absolutePath == b.absolutePath)
 
-    /**
-     * 旧缓存目录能否整棵删除。
-     *
-     * ★ 曾把缓存目录设到盘符根（`D:\`）的用户，若在这里直接 `deleteRecursively()`，会被清空一整块盘。
-     *   所以只有「确实是本应用独占的缓存目录」才允许递归删除：
-     * - 不是盘符根（`D:\` 没有父目录）；
-     * - 不是当前缓存 / 数据根 / 用户主目录 / 应用根目录的祖先（删旧会把它们一起删掉）；
-     * - 顶层条目全部属于本应用（混着用户自己的文件就只保留，宁可留下旧缓存）。
-     */
-    private fun canDeleteOldCacheDir(oldDir: File): Boolean {
-        val oldPath = runCatching { oldDir.canonicalFile.toPath() }.getOrNull() ?: return false
-        if (oldPath.parent == null) return false
-        val mustKeep = listOfNotNull(
-            runCatching { cacheDir.canonicalFile.toPath() }.getOrNull(),
-            runCatching { dataDir.canonicalFile.toPath() }.getOrNull(),
-            runCatching { File(System.getProperty("user.home").orEmpty()).canonicalFile.toPath() }.getOrNull(),
-            runCatching { appRootDir.canonicalFile.toPath() }.getOrNull()
-        )
-        if (mustKeep.any { it.startsWith(oldPath) }) return false
-        return oldDir.listFiles()?.all { StorageMigrator.isOwnedCacheEntry(it.name) } == true
-    }
+    /** 清理旧缓存时绝不能动的目录：当前缓存 / 数据根 / 数据库目录 / 应用根目录 / 用户主目录 */
+    private fun protectedStorageDirs(): List<File> = listOf(
+        cacheDir,
+        dataDir,
+        dbDir,
+        appRootDir,
+        File(System.getProperty("user.home").orEmpty())
+    )
 
-    /** 读取配置的目录；未配置或目录不可用（被删/无权限）时回退默认值，绝不让应用起不来 */
+    /** 读取配置的目录；未配置或目录不可用（被删 / 无权限 / 危险位置）时回退默认值，绝不让应用起不来 */
     private fun resolveConfiguredDir(key: String, defaultDir: File): File {
         val raw = settingsPrefs.get(key, null)?.trim().orEmpty()
         if (raw.isEmpty()) return defaultDir
         val configured = File(raw)
+        // ★ 老版本可能把缓存 / 数据库目录设成过盘符根或用户主目录。这种配置绝不能再生效：
+        //   否则启动时会在盘符根建 download_tmp 之类子目录，JCEF 还会往那里解包约 200MB。
+        //   静默回退到默认位置（数据仍可正常使用，缓存会重新建一份）。
+        if (StorageMigrator.isDangerousStorageLocation(configured)) {
+            Log.w("YunX-DataDir", "配置的目录是盘符根 / 用户主目录，回退默认：$raw")
+            return defaultDir
+        }
         if (configured.isDirectory) return configured
         if (configured.mkdirs()) return configured
         Log.w("YunX-DataDir", "配置的目录不可用，回退默认：$raw")

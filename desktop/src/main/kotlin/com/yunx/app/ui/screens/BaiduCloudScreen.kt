@@ -124,21 +124,18 @@ fun BaiduCloudScreen(
     val settingsRepo = remember { SettingsRepository() }
     var limitHintDismissed by remember { mutableStateOf(settingsRepo.baiduLimitHintDismissed) }
     var showBaiduLimitDialog by remember { mutableStateOf(false) }
-    var pendingBaiduDownload by remember { mutableStateOf<String?>(null) } // "single" / "batch"
-    var pendingBaiduSaveDir by remember { mutableStateOf("") }
+    // 操作菜单关闭时 actionFile 会清空；捕获文件与保存目录，提示确认后仍能执行原操作。
+    var pendingBaiduDownload by remember { mutableStateOf<(() -> Unit)?>(null) }
     // 「下载到…」目录选择器
     val pickDownloadDir = rememberDownloadDirPicker()
 
     /** 判断是否需要弹限速提示；需要则记录待执行动作并弹窗，否则直接执行 */
     fun maybeShowBaiduLimit(
         files: List<ShareFile>,
-        action: String,
-        saveDir: String = "",
         onProceed: () -> Unit
     ) {
         if (!limitHintDismissed && files.any { it.fsize > BAIDU_LIMIT_BYTES }) {
-            pendingBaiduDownload = action
-            pendingBaiduSaveDir = saveDir
+            pendingBaiduDownload = onProceed
             showBaiduLimitDialog = true
         } else {
             onProceed()
@@ -359,11 +356,11 @@ fun BaiduCloudScreen(
                             count = viewModel.selected.size,
                             actions = listOf(
                                 MultiSelectAction("下载", Icons.Outlined.Download, MaterialTheme.colorScheme.primary) {
-                                    maybeShowBaiduLimit(viewModel.selected, "batch") { viewModel.downloadSelected() }
+                                    maybeShowBaiduLimit(viewModel.selected) { viewModel.downloadSelected() }
                                 },
                                 MultiSelectAction("下载到…", Icons.Outlined.FolderOpen, MaterialTheme.colorScheme.primary) {
                                     pickDownloadDir { dir ->
-                                        maybeShowBaiduLimit(viewModel.selected, "batch", saveDir = dir) {
+                                        maybeShowBaiduLimit(viewModel.selected) {
                                             viewModel.downloadSelected(dir)
                                         }
                                     }
@@ -395,7 +392,7 @@ fun BaiduCloudScreen(
                 showActionSheet = false
                 val f = viewModel.actionFile
                 if (f != null) {
-                    maybeShowBaiduLimit(listOf(f), "single") { viewModel.downloadFile() }
+                    maybeShowBaiduLimit(listOf(f)) { viewModel.downloadFile(f) }
                 }
             },
             onDownloadTo = {
@@ -403,8 +400,8 @@ fun BaiduCloudScreen(
                     val f = viewModel.actionFile
                     if (f != null) {
                         showActionSheet = false
-                        maybeShowBaiduLimit(listOf(f), "single", saveDir = dir) {
-                            viewModel.downloadFileTo(dir)
+                        maybeShowBaiduLimit(listOf(f)) {
+                            viewModel.downloadFileTo(dir, f)
                         }
                     }
                 }
@@ -537,7 +534,10 @@ fun BaiduCloudScreen(
     if (showBaiduLimitDialog) {
         var neverShow by remember { mutableStateOf(limitHintDismissed) }
         AlertDialog(
-            onDismissRequest = { showBaiduLimitDialog = false },
+            onDismissRequest = {
+                showBaiduLimitDialog = false
+                pendingBaiduDownload = null
+            },
             title = { Text("下载大文件提示") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -558,25 +558,16 @@ fun BaiduCloudScreen(
                         showBaiduLimitDialog = false
                         settingsRepo.baiduLimitHintDismissed = neverShow
                         limitHintDismissed = neverShow
-                        when (pendingBaiduDownload) {
-                            "single" -> if (pendingBaiduSaveDir.isNotBlank()) {
-                                viewModel.downloadFileTo(pendingBaiduSaveDir)
-                            } else {
-                                viewModel.downloadFile()
-                            }
-                            "batch" -> if (pendingBaiduSaveDir.isNotBlank()) {
-                                viewModel.downloadSelected(pendingBaiduSaveDir)
-                            } else {
-                                viewModel.downloadSelected()
-                            }
-                        }
+                        pendingBaiduDownload?.invoke()
                         pendingBaiduDownload = null
-                        pendingBaiduSaveDir = ""
                     }
                 ) { Text("继续下载") }
             },
             dismissButton = {
-                TextButton(onClick = { showBaiduLimitDialog = false }) { Text("取消") }
+                TextButton(onClick = {
+                    showBaiduLimitDialog = false
+                    pendingBaiduDownload = null
+                }) { Text("取消") }
             }
         )
     }

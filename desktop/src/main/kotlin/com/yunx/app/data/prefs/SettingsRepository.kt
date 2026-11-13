@@ -109,6 +109,33 @@ class SettingsRepository {
             prefs.putBoolean("quark_no_save_download", value)
         }
 
+    /** 百度下载方式：CDN 明文直链（默认）或内置 P2P 下载，未覆盖区间与失败任务自动回退 CDN。 */
+    var baiduDownloadMode: String
+        get() = normalizeBaiduDownloadMode(prefs.get("baidu_download_mode", BAIDU_DOWNLOAD_MODE_CDN))
+        set(value) {
+            prefs.put("baidu_download_mode", normalizeBaiduDownloadMode(value))
+        }
+
+    /** 百度 P2P 并发分片数，默认 8。 */
+    var baiduP2pWorkers: Int
+        get() = prefs.getInt("baidu_p2p_workers", 8).coerceIn(1, 32)
+        set(value) { prefs.putInt("baidu_p2p_workers", value.coerceIn(1, 32)) }
+
+    /** 百度 P2P 低速节点切换窗口（秒），默认 6。 */
+    var baiduP2pSlowSeconds: Int
+        get() = prefs.getInt("baidu_p2p_slow_seconds", 6).coerceIn(1, 120)
+        set(value) { prefs.putInt("baidu_p2p_slow_seconds", value.coerceIn(1, 120)) }
+
+    /** 百度 P2P 低速阈值（KiB/s），默认 128。 */
+    var baiduP2pSlowKbps: Int
+        get() = prefs.getInt("baidu_p2p_slow_kbps", 128).coerceIn(1, 1_048_576)
+        set(value) { prefs.putInt("baidu_p2p_slow_kbps", value.coerceIn(1, 1_048_576)) }
+
+    /** 百度 P2P 最小切换分片（KiB），默认 256；小于此值的尾片不触发低速切换。 */
+    var baiduP2pMinRemainKb: Int
+        get() = prefs.getInt("baidu_p2p_min_remain_kb", 256).coerceIn(0, 4_194_304)
+        set(value) { prefs.putInt("baidu_p2p_min_remain_kb", value.coerceIn(0, 4_194_304)) }
+
     /** 后台剪贴板分享链接检测（主窗口失焦时轮询剪贴板，检测到网盘链接弹出提示） */
     var clipboardLinkDetection: Boolean
         get() = prefs.getBoolean("clipboard_link_detection", true)
@@ -560,6 +587,12 @@ class SettingsRepository {
         multiSourceDownload = false
     }
 
+    /** 未识别的百度下载方式一律回退为 CDN。 */
+    private fun normalizeBaiduDownloadMode(value: String): String = when (value) {
+        BAIDU_DOWNLOAD_MODE_P2P -> BAIDU_DOWNLOAD_MODE_P2P
+        else -> BAIDU_DOWNLOAD_MODE_CDN
+    }
+
     /** 归一化代理模式：非法值一律回退为直连 */
     private fun normalizeProxyMode(value: String): String = when (value) {
         PROXY_MODE_SYSTEM, PROXY_MODE_MANUAL -> value
@@ -607,6 +640,9 @@ class SettingsRepository {
         const val ENGINE_BUILTIN = "builtin"
         /** 下载引擎：外部 Gopeed 引擎（exe 子进程 + 本地 HTTP API） */
         const val ENGINE_GOPEED = "gopeed"
+
+        const val BAIDU_DOWNLOAD_MODE_CDN = "cdn"
+        const val BAIDU_DOWNLOAD_MODE_P2P = "p2p"
 
         /**
          * BT 内置默认 tracker 列表（用户没自定义时下发给引擎）。

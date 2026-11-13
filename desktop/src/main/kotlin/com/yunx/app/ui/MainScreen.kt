@@ -92,6 +92,7 @@ import com.yunx.app.data.network.video.VideoMedia
 import com.yunx.app.data.network.video.VideoParseResult
 import com.yunx.app.data.network.video.VideoPlatform
 import com.yunx.app.data.download.VideoDownloads
+import com.yunx.app.data.download.BaiduP2pDownloader
 import com.yunx.app.data.update.UpdateChecker
 import com.yunx.app.data.db.DownloadTaskEntity
 import com.yunx.app.data.prefs.SettingsRepository
@@ -256,10 +257,13 @@ fun MainScreen(
     }
 
     // 依赖装配（与 Android 版相同的对象图，去掉 Android 专属注入）
+    val settings = remember { SettingsRepository() }
     val api = remember { QuarkApi() }
     val ucApi = remember { UCApi() }
     val xunleiApi = remember { XunleiApi() }
-    val baiduApi = remember { BaiduApi() }
+    val baiduApi = remember {
+        BaiduApi(downloadModeProvider = { settings.baiduDownloadMode })
+    }
     val c139Api = remember { C139Api() }
     val pan123Api = remember { Pan123Api() }
     val pan115Api = remember { Pan115Api() }
@@ -267,7 +271,6 @@ fun MainScreen(
     val ilanzouApi = remember { ILanzouApi() }
     val lanzouApi = remember { LanzouApi() }
     val db = remember { AppDatabase.get() }
-    val settings = remember { SettingsRepository() }
     // 主页快捷方式开关（实验性功能，默认关闭）：由实验性功能页回调同步，控制解析页是否显示收藏快捷方式
     var homeShortcutsEnabled by remember { mutableStateOf(settings.homeShortcutEnabled) }
     // 网盘页 GitHub 卡片登录态：保存/清除 Token 后即时刷新卡片文案
@@ -349,7 +352,16 @@ fun MainScreen(
             directWriteSingleProvider = { settings.directWriteSingleThread },
             directWriteMultiProvider = { settings.directWriteMultiThread },
             // 下载引擎开关：选了 Gopeed 时新任务交给外部引擎（还需内核已导入、平台非 GitHub）
-            engineEnabledProvider = { settings.downloadEngine == SettingsRepository.ENGINE_GOPEED }
+            engineEnabledProvider = { settings.downloadEngine == SettingsRepository.ENGINE_GOPEED },
+            baiduDownloadModeProvider = { settings.baiduDownloadMode },
+            baiduP2pWorkersProvider = { settings.baiduP2pWorkers },
+            baiduP2pDownloaderProvider = {
+                BaiduP2pDownloader(
+                    slowNodeWindowMillis = settings.baiduP2pSlowSeconds * 1000L,
+                    slowNodeMinBytesPerSecond = settings.baiduP2pSlowKbps * 1024L,
+                    slowNodeMinRemainBytes = settings.baiduP2pMinRemainKb * 1024L
+                )
+            }
         )
     }
 

@@ -203,6 +203,12 @@ fun SettingsScreen(
     var retryCount by remember { mutableStateOf(settingsRepo.downloadRetryCount) }
     // 夸克取链方式：免转存（默认，不写入网盘）↔ 转存（先存临时目录再取链）
     var quarkNoSave by remember { mutableStateOf(settingsRepo.quarkNoSaveDownload) }
+    var baiduMode by remember { mutableStateOf(settingsRepo.baiduDownloadMode) }
+    var baiduWorkers by remember { mutableStateOf(settingsRepo.baiduP2pWorkers) }
+    var baiduSlowSeconds by remember { mutableStateOf(settingsRepo.baiduP2pSlowSeconds) }
+    var baiduSlowKbps by remember { mutableStateOf(settingsRepo.baiduP2pSlowKbps) }
+    var baiduMinRemainKb by remember { mutableStateOf(settingsRepo.baiduP2pMinRemainKb) }
+    var showBaiduDialog by remember { mutableStateOf(false) }
     var showConcurrencyDialog by remember { mutableStateOf(false) }
     var showSpeedDialog by remember { mutableStateOf(false) }
     var showRetryDialog by remember { mutableStateOf(false) }
@@ -299,6 +305,19 @@ fun SettingsScreen(
                 settingsRepo.quarkNoSaveDownload = quarkNoSave
             },
             trailing = { Switch(checked = quarkNoSave, onCheckedChange = null) }
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        SettingsItem(
+            icon = Icons.Outlined.Cloud,
+            title = "百度网盘下载",
+            description = if (baiduMode == SettingsRepository.BAIDU_DOWNLOAD_MODE_P2P) {
+                "P2P（只下载、不上传）· $baiduWorkers 线程 · 持续 $baiduSlowSeconds 秒低于 $baiduSlowKbps KiB/s 时切换节点"
+            } else {
+                "CDN / HTTP 直链（默认）· 可切换 P2P 并调整线程和低速阈值"
+            },
+            onClick = { showBaiduDialog = true }
         )
 
         Spacer(modifier = Modifier.height(8.dp))
@@ -825,6 +844,30 @@ fun SettingsScreen(
     }
 
     // 线程数选择弹窗（按平台；右上角可在一列 / 两列之间切换）
+    if (showBaiduDialog) {
+        BaiduP2pSettingsDialog(
+            mode = baiduMode,
+            workers = baiduWorkers,
+            slowSeconds = baiduSlowSeconds,
+            slowKbps = baiduSlowKbps,
+            minRemainKb = baiduMinRemainKb,
+            onDismiss = { showBaiduDialog = false },
+            onConfirm = { mode, workers, seconds, kbps, minRemain ->
+                settingsRepo.baiduDownloadMode = mode
+                settingsRepo.baiduP2pWorkers = workers
+                settingsRepo.baiduP2pSlowSeconds = seconds
+                settingsRepo.baiduP2pSlowKbps = kbps
+                settingsRepo.baiduP2pMinRemainKb = minRemain
+                baiduMode = settingsRepo.baiduDownloadMode
+                baiduWorkers = settingsRepo.baiduP2pWorkers
+                baiduSlowSeconds = settingsRepo.baiduP2pSlowSeconds
+                baiduSlowKbps = settingsRepo.baiduP2pSlowKbps
+                baiduMinRemainKb = settingsRepo.baiduP2pMinRemainKb
+                showBaiduDialog = false
+            }
+        )
+    }
+
     if (showThreadsDialog) {
         FadeAlertDialog(
             visible = true,
@@ -1467,6 +1510,120 @@ fun SettingsScreen(
                 TextButton(onClick = { showProxyDialog = false }) { Text("取消") }
             }
         )
+    }
+}
+
+@Composable
+private fun BaiduP2pSettingsDialog(
+    mode: String,
+    workers: Int,
+    slowSeconds: Int,
+    slowKbps: Int,
+    minRemainKb: Int,
+    onDismiss: () -> Unit,
+    onConfirm: (String, Int, Int, Int, Int) -> Unit
+) {
+    var editMode by remember { mutableStateOf(mode) }
+    var workersText by remember { mutableStateOf(workers.toString()) }
+    var secondsText by remember { mutableStateOf(slowSeconds.toString()) }
+    var kbpsText by remember { mutableStateOf(slowKbps.toString()) }
+    var minRemainText by remember { mutableStateOf(minRemainKb.toString()) }
+
+    FadeAlertDialog(
+        visible = true,
+        onDismissRequest = onDismiss,
+        title = { Text("百度网盘下载") },
+        text = {
+            Column(
+                modifier = Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text("下载方式", style = MaterialTheme.typography.titleSmall)
+                BaiduModeRow(
+                    title = "CDN / HTTP 直链",
+                    description = "默认方式，兼容性最好。",
+                    selected = editMode == SettingsRepository.BAIDU_DOWNLOAD_MODE_CDN,
+                    onSelect = { editMode = SettingsRepository.BAIDU_DOWNLOAD_MODE_CDN }
+                )
+                BaiduModeRow(
+                    title = "P2P（只下载、不上传）",
+                    description = "使用内置下载器访问百度节点，节点不可用时自动回退 CDN。",
+                    selected = editMode == SettingsRepository.BAIDU_DOWNLOAD_MODE_P2P,
+                    onSelect = { editMode = SettingsRepository.BAIDU_DOWNLOAD_MODE_P2P }
+                )
+                if (editMode == SettingsRepository.BAIDU_DOWNLOAD_MODE_P2P) {
+                    Text("P2P 参数", style = MaterialTheme.typography.titleSmall)
+                    OutlinedTextField(
+                        value = workersText,
+                        onValueChange = { workersText = it.filter { c -> c in '0'..'9' }.take(10) },
+                        label = { Text("下载线程数（1-32）") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = secondsText,
+                        onValueChange = { secondsText = it.filter { c -> c in '0'..'9' }.take(10) },
+                        label = { Text("低速判定窗口（秒，1-120）") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = kbpsText,
+                        onValueChange = { kbpsText = it.filter { c -> c in '0'..'9' }.take(10) },
+                        label = { Text("低速阈值（KiB/s，1-1048576）") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = minRemainText,
+                        onValueChange = { minRemainText = it.filter { c -> c in '0'..'9' }.take(10) },
+                        label = { Text("最小切换分片（KiB，0-4194304）") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Text(
+                        "窗口内平均速度低于阈值且分片达到最小大小时，切换到下一节点；全部候选失败后回退 CDN。参数保存时自动修正到有效范围，对新任务生效。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                onConfirm(
+                    editMode,
+                    workersText.toLongOrNull()?.coerceIn(1L, 32L)?.toInt() ?: workers,
+                    secondsText.toLongOrNull()?.coerceIn(1L, 120L)?.toInt() ?: slowSeconds,
+                    kbpsText.toLongOrNull()?.coerceIn(1L, 1_048_576L)?.toInt() ?: slowKbps,
+                    minRemainText.toLongOrNull()?.coerceIn(0L, 4_194_304L)?.toInt() ?: minRemainKb
+                )
+            }) { Text("确定") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
+    )
+}
+
+@Composable
+private fun BaiduModeRow(title: String, description: String, selected: Boolean, onSelect: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onSelect).padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        RadioButton(selected = selected, onClick = onSelect)
+        Spacer(modifier = Modifier.width(8.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }
 

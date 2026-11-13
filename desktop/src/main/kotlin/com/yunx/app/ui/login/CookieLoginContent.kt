@@ -45,6 +45,7 @@ import com.yunx.app.ui.SnackbarController
 import com.yunx.app.ui.jcef.JcefHolder
 import com.yunx.app.ui.GlobalSnackbarHost
 import com.yunx.app.util.DesktopActions
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 /**
@@ -79,13 +80,19 @@ fun CookieLoginContent(
     fun doSave() {
         scope.launch {
             isSaving = true
-            val saved = onSave(cookieInput.trim())
-            isSaving = false
-            if (saved) {
-                SnackbarController.show("登录成功")
-                onSaved()
-            } else {
-                SnackbarController.show("Cookie 无效：$cookieRequirement")
+            try {
+                if (onSave(cookieInput.trim())) {
+                    SnackbarController.show("登录成功")
+                    onSaved()
+                } else {
+                    SnackbarController.show("Cookie 无效：$cookieRequirement")
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                SnackbarController.show("登录验证失败，请稍后重试")
+            } finally {
+                isSaving = false
             }
         }
     }

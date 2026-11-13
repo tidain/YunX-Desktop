@@ -30,6 +30,38 @@ cd YunX-Desktop
 
 也可双击 `run.bat`（走同一入口）。中文向导语言包随仓库分发（`installer\ChineseSimplified.isl`）。
 
+## macOS（实验性）
+
+在 Apple Silicon（arm64）macOS 上验证过编译、单元测试与 `.app` 打包；Intel Mac 走同一套逻辑（`mac` / `macosx-amd64` 原生库），未实测。
+
+| 依赖 | 说明 |
+| --- | --- |
+| JDK 17+ | 打包（`app` / `dmg`）需非 Homebrew 发行版（如 Amazon Corretto、Temurin），Compose 插件会拒绝 Homebrew JDK（[compose-multiplatform#3107](https://github.com/JetBrains/compose-multiplatform/issues/3107)）；可用 `JAVA_HOME` 指定 |
+| FFmpeg（可选） | 在线预览 / 合轨；会自动探测 `/opt/homebrew/bin`、`/usr/local/bin` 与 `PATH`（如 `brew install ffmpeg`）。没有时退回内置 JavaFX 播放器与纯 Java 合轨 |
+
+不需要 C++ 编译器：`darkmode.dll` 只在 Windows 上编译。
+
+```bash
+./run-mac.sh run     # 编译并启动
+./run-mac.sh build   # 仅编译 Kotlin
+./run-mac.sh app     # 打包 → desktop/build/compose/binaries/main/app/YunX-Desktop.app
+./run-mac.sh dmg     # 打包 → desktop/build/compose/binaries/main/dmg/
+```
+
+平台差异（相对 Windows）：
+
+| 功能 | macOS 实现 |
+| --- | --- |
+| 原生库 | `sqlite-jdbc` 官方多平台包、`javafx-*:mac-aarch64`、`jcef-natives-macosx-arm64`（按构建机自动选择） |
+| 托盘 | 菜单栏图标 + AWT 原生菜单（显示主窗口 / 退出） |
+| 在 Finder 中显示 / 打开目录 | `open -R` / `open` |
+| 下载时阻止休眠 | `caffeinate -i -w <pid>` |
+| 系统代理 | `scutil --proxy`（HTTP / HTTPS / SOCKS；PAC 按直连处理） |
+| 凭证密钥「普通」档 | 机器指纹取 `IOPlatformUUID` |
+| 浏览器 Cookie 导入 | 仅 Firefox |
+
+尚未支持：通知中心进度条、下载完成后关机、应用内重启、Chromium 系浏览器 Cookie 导入、数据库加密「较为严格」档（依赖 Windows DPAPI，界面中不可选）。
+
 ## 版本号
 
 根目录 `version.txt` 是**唯一版本来源**：jpackage 版本、便携包 / 安装包的文件名与程序版本、

@@ -51,7 +51,11 @@ object SystemProxy {
      */
     fun inspect(): Inspect {
         if (!isWindows) {
-            Log.i(TAG, "非 Windows 平台，不支持系统代理，按直连处理")
+            val os = System.getProperty("os.name", "").lowercase()
+            if (os.contains("mac") || os.contains("darwin")) {
+                return inspectMacProxy()
+            }
+            Log.i(TAG, "非 Windows/macOS 平台，不支持系统代理，按直连处理")
             return Inspect.Unavailable
         }
         val enable = readInt("ProxyEnable") ?: 0
@@ -60,6 +64,41 @@ object SystemProxy {
         val override = readString("ProxyOverride")
         return parse(enable, server, pac, override)
     }
+
+    private fun inspectMacProxy(): Inspect = runCatching {
+        val proc = ProcessBuilder("/usr/sbin/scutil", "--proxy").redirectErrorStream(true).start()
+        val out = proc.inputStream.bufferedReader().readText()
+        proc.waitFor()
+        val map = out.lineSequence()
+            .mapNotNull { line ->
+                val idx = line.indexOf(':')
+                if (idx <= 0) null
+                else line.substring(0, idx).trim() to line.substring(idx + 1).trim()
+            }
+            .toMap()
+        if (map["ProxyAutoConfigEnable"] == "1" && !map["ProxyAutoConfigURLString"].isNullOrBlank()) {
+            Log.w(TAG, "检测到 macOS PAC 自动配置脚本，按直连处理")
+            return@runCatching Inspect.PacUnsupported
+        }
+        val httpEnable = map["HTTPEnable"] == "1"
+        val httpsEnable = map["HTTPSEnable"] == "1"
+        val socksEnable = map["SOCKSEnable"] == "1"
+        when {
+            httpEnable && !map["HTTPProxy"].isNullOrBlank() -> {
+                val port = map["HTTPPort"]?.toIntOrNull() ?: DEFAULT_HTTP_PORT
+                Inspect.Proxy(map["HTTPProxy"]!!, port)
+            }
+            httpsEnable && !map["HTTPSProxy"].isNullOrBlank() -> {
+                val port = map["HTTPSPort"]?.toIntOrNull() ?: DEFAULT_HTTPS_PORT
+                Inspect.Proxy(map["HTTPSProxy"]!!, port)
+            }
+            socksEnable && !map["SOCKSProxy"].isNullOrBlank() -> {
+                val port = map["SOCKSPort"]?.toIntOrNull() ?: DEFAULT_SOCKS_PORT
+                Inspect.Proxy(map["SOCKSProxy"]!!, port)
+            }
+            else -> Inspect.Direct
+        }
+    }.getOrDefault(Inspect.Unavailable)
 
     /**
      * 纯解析逻辑（不读注册表，便于用例验证）：

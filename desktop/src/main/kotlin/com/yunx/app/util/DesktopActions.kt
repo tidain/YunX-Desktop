@@ -62,6 +62,13 @@ object DesktopActions {
     fun revealFile(path: String): Boolean {
         val file = File(path)
         if (!file.exists()) return false
+        val osName = System.getProperty("os.name", "").lowercase()
+        if (osName.contains("mac") || osName.contains("darwin")) {
+            return runCatching {
+                ProcessBuilder("open", "-R", file.absolutePath).start()
+                true
+            }.getOrDefault(false)
+        }
         if (WindowsTitleBar.isWindows) {
             // 返回 HINSTANCE：> 32 表示成功（<= 32 是错误码），失败再退回命令行方式
             val ret = runCatching {
@@ -71,19 +78,36 @@ object DesktopActions {
                 )
             }.getOrNull()
             if (ret != null && com.sun.jna.Pointer.nativeValue(ret.toPointer()) > 32L) return true
+            return runCatching {
+                ProcessBuilder("explorer.exe", "/select,", file.absolutePath).start()
+                true
+            }.getOrDefault(false)
         }
         return runCatching {
-            ProcessBuilder("explorer.exe", "/select,", file.absolutePath).start()
+            java.awt.Desktop.getDesktop().open(file.parentFile ?: file)
             true
         }.getOrDefault(false)
     }
 
-    /** 在资源管理器中打开目录（不存在时先创建） */
+    /** 在资源管理器 / Finder 中打开目录（不存在时先创建） */
     fun openDirectory(path: String): Boolean {
         val dir = File(path)
         if (!dir.isDirectory && !dir.mkdirs()) return false
+        val osName = System.getProperty("os.name", "").lowercase()
+        if (osName.contains("mac") || osName.contains("darwin")) {
+            return runCatching {
+                ProcessBuilder("open", dir.absolutePath).start()
+                true
+            }.getOrDefault(false)
+        }
+        if (WindowsTitleBar.isWindows) {
+            return runCatching {
+                ProcessBuilder("explorer.exe", dir.absolutePath).start()
+                true
+            }.getOrDefault(false)
+        }
         return runCatching {
-            ProcessBuilder("explorer.exe", dir.absolutePath).start()
+            java.awt.Desktop.getDesktop().open(dir)
             true
         }.getOrDefault(false)
     }
@@ -181,14 +205,18 @@ object DesktopActions {
             val dialog = FileDialog(null as Frame?, "选择文件夹", FileDialog.LOAD)
             dialog.isMultipleMode = false
             System.setProperty("apple.awt.fileDialogForDirectories", "true")
-            dialog.isVisible = true
-            val dir = dialog.directory
-            val file = dialog.file
-            dialog.dispose()
-            return when {
-                dir == null -> null
-                file == null -> dir
-                else -> File(dir, file).absolutePath
+            return try {
+                dialog.isVisible = true
+                val dir = dialog.directory
+                val file = dialog.file
+                when {
+                    dir == null -> null
+                    file == null -> dir
+                    else -> File(dir, file).absolutePath
+                }
+            } finally {
+                System.setProperty("apple.awt.fileDialogForDirectories", "false")
+                dialog.dispose()
             }
         }
 

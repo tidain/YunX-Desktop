@@ -34,8 +34,9 @@ enum class DbEncryptionLevel(val id: String, val label: String) {
     STRICT("strict", "较为严格"),
     STRICTEST("strictest", "严格");
 
-    /** 该档位在当前系统上是否可用（严格档需要 SQLCipher 原生库，暂未支持） */
-    val isSupported: Boolean get() = this != STRICTEST
+    /** 该档位在当前系统上是否可用（严格档需要 SQLCipher 原生库，暂未支持；较为严格档依赖 Windows DPAPI） */
+    val isSupported: Boolean
+        get() = this != STRICTEST && (this != STRICT || System.getProperty("os.name").orEmpty().lowercase().contains("win"))
 
     /** 密钥是否绑定本机（换机器后凭证将无法解密，需重新登录） */
     val isMachineBound: Boolean get() = this == NORMAL || this == STRICT
@@ -217,12 +218,31 @@ object DbKeyStore {
         )
     }
 
-    /** Windows MachineGuid（HKLM\SOFTWARE\Microsoft\Cryptography），普通用户可读 */
-    private fun machineGuid(): String? = runCatching {
-        Advapi32Util.registryGetStringValue(
-            WinReg.HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Cryptography", "MachineGuid"
-        ).takeIf { it.isNotBlank() }
-    }.getOrNull()
+    /**
+     * 机器唯一标识：Windows 读 MachineGuid（HKLM\SOFTWARE\Microsoft\Cryptography，普通用户可读）；
+     * macOS 读 IOPlatformUUID（`ioreg`，硬件级、不随改名变化）。其它平台返回 null（行为同改动前）。
+     */
+    private fun machineGuid(): String? {
+        if (isMac()) return macPlatformUuid()
+        return runCatching {
+            Advapi32Util.registryGetStringValue(
+                WinReg.HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Cryptography", "MachineGuid"
+            ).takeIf { it.isNotBlank() }
+        }.getOrNull()
+    }
+
+    private fun isMac(): Boolean =
+        System.getProperty("os.name").orEmpty().lowercase().let { it.contains("mac") || it.contains("darwin") }
+
+    /** macOS IOPlatformUUID；读不到返回 null（调用方按「暂时不可用」处理，不会换密钥） */
+    private fun macPlatformUuid(): String? = runCatching {
+        val p = ProcessBuilder("/usr/sbin/ioreg", "-rd1", "-c", "IOPlatformExpertDevice")
+            .redirectErrorStream(true)
+            .start()
+        val out = p.inputStream.bufferedReader().readText()
+        p.waitFor()
+        Regex("\"IOPlatformUUID\"\\s*=\\s*\"([^\"]+)\"").find(out)?.groupValues?.getOrNull(1)
+    }.getOrNull()?.takeIf { it.isNotBlank() }
 
     /** 较为严格档：Windows DPAPI（CryptProtectData，绑定当前登录用户） */
     private fun wrapDpapi(key: ByteArray): String {

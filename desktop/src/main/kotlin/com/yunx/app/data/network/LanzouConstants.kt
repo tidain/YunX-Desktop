@@ -63,4 +63,6 @@ object LanzouConstants {
         u = u.substringBefore('#')
         return u.trimEnd('/')
     }
+    // 原生上传协议
+    const val HTML5UP_URL = "https://pc.woozooo.com/html5up.php"
 }

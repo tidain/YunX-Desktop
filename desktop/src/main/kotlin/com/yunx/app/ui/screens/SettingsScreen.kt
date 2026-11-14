@@ -199,6 +199,8 @@ fun SettingsScreen(
     var fullShaOn by remember { mutableStateOf(settingsRepo.fullFileSha256) }
     // 网络与下载策略（本地状态驱动 UI，同时同步 Preferences）
     var maxConcurrent by remember { mutableStateOf(settingsRepo.maxConcurrentDownloads) }
+    val uploadConcurrency by SettingsRepository.uploadConcurrency.collectAsState()
+    var showUploadConcurrencyDialog by remember { mutableStateOf(false) }
     var speedLimitBps by remember { mutableStateOf(settingsRepo.downloadSpeedLimit) }
     var retryCount by remember { mutableStateOf(settingsRepo.downloadRetryCount) }
     // 夸克取链方式：免转存（默认，不写入网盘）↔ 转存（先存临时目录再取链）
@@ -235,6 +237,16 @@ fun SettingsScreen(
             .verticalScroll(rememberScrollState())
             .padding(16.dp)
     ) {
+        SectionLabel("上传")
+        SettingsItem(
+            icon = Icons.Outlined.Layers,
+            title = "上传并发数",
+            description = "每个网盘同时处理 $uploadConcurrency 个文件，超出排队；调高立即补位，调低不打断已有任务",
+            onClick = { showUploadConcurrencyDialog = true }
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
         SectionLabel("下载")
         SettingsItem(
             icon = Icons.Outlined.Tune,
@@ -989,6 +1001,39 @@ fun SettingsScreen(
     // 导出/导入处理中：转圈加载弹窗（PBKDF2 派生密钥耗时较长，避免用户以为界面卡死）
     OperationLoadingDialog(visible = isExporting, message = "正在导出认证…")
     OperationLoadingDialog(visible = isImporting, message = "正在导入认证…")
+
+    // 上传文件并发：复用现有设置的单选弹窗，修改后立即唤醒上传调度器。
+    FadeAlertDialog(
+        visible = showUploadConcurrencyDialog,
+        onDismissRequest = { showUploadConcurrencyDialog = false },
+        title = { Text("上传并发数") },
+        text = {
+            Column {
+                Text("设置多个文件同时处理的上限，包含准备、传输及等待确认；同名文件依次上传。单个文件的分片仍按网盘协议顺序发送。调低不会中断已开始的文件。", style = MaterialTheme.typography.bodySmall)
+                Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
+                    (1..SettingsRepository.MAX_CONCURRENT_UPLOADS).forEach { v ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = uploadConcurrency == v,
+                                onClick = {
+                                    settingsRepo.maxConcurrentUploads = v
+                                    showUploadConcurrencyDialog = false
+                                }
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("同时上传 $v 个文件", style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { showUploadConcurrencyDialog = false }) { Text("取消") }
+        }
+    )
 
     // 最大同时下载任务数
     FadeAlertDialog(

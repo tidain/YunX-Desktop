@@ -97,4 +97,10 @@ object GuangYaConstants {
         fun hex(n: Int) = buildString(n) { repeat(n) { append("0123456789abcdef"[rnd.nextInt(16)]) } }
         return "00-${hex(32)}-${hex(16)}-01"
     }
+    // 原生上传协议
+    const val UPLOAD_TOKEN = "$API_BASE/nd.bizuserres.s/v1/get_res_center_token"
+    const val UPLOAD_MAX_POLLS = 180
+    const val UPLOAD_TASK_INFO = "$API_BASE/nd.bizuserres.s/v1/file/get_info_by_task_id"
+    val UPLOAD_PENDING_CODES = setOf("145", "146", "147", "155", "163")
+    const val UPLOAD_POLL_INTERVAL_MS = 1000L
 }

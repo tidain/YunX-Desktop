@@ -1,5 +1,9 @@
 package com.yunx.app.data.network
 
+import com.yunx.app.data.upload.UploadIo
+import com.yunx.app.data.upload.UploadSource
+import com.yunx.app.data.upload.UploadPhase
+
 import java.util.Base64
 import com.yunx.app.data.network.model.DownloadLink
 import com.yunx.app.data.network.model.QuotaInfo
@@ -217,7 +221,7 @@ class Pan123Api(
         }
         val files = parseInfoList(data)
         // 文档 §5.2：Next=="-1" 无下一页；空串 "" 表示还有下一页（需继续翻页）；数字为游标
-        val nextCursor = data.optString("Next").takeIf { it != "-1" }
+        val nextCursor = data.optString("Next").takeIf { it.isNotBlank() && it != "-1" }
         Pair(files, nextCursor)
     }
 
@@ -269,11 +273,12 @@ class Pan123Api(
     // ---------- 个人盘（网盘页，需登录+签名） ----------
 
     /** 个人盘文件列表：GET /b/api/file/list/new（文档 §5.4）。返回 (文件列表, 下一页游标 or null) */
-    suspend fun listCloudFiles(parentFileId: String, token: String): Pair<List<ShareFile>, String?> =
+    suspend fun listCloudFiles(parentFileId: String, token: String, next: String = "0"): Pair<List<ShareFile>, String?> =
         withContext(Dispatchers.IO) {
             val url = buildString {
                 append(Pan123Constants.FILE_LIST_URL)
-                append("?driveId=0&limit=100&next=0&orderBy=update_time&orderDirection=desc")
+                append("?driveId=0&limit=100&next=").append(java.net.URLEncoder.encode(next, "UTF-8"))
+                append("&orderBy=update_time&orderDirection=desc")
                 append("&parentFileId=").append(parentFileId)
                 append("&trashed=false&SearchData=&Page=1&OnlyLookAbnormalFile=0")
                 append("&event=homeListFile&operateType=1&inDirectSpace=false")
@@ -282,7 +287,7 @@ class Pan123Api(
             checkOk(json, "获取文件列表失败")
             val data = json.optJSONObject("data") ?: return@withContext Pair(emptyList(), null)
             val files = parseInfoList(data)
-            val next = data.optString("Next").takeIf { it != "-1" }
+            val next = data.optString("Next").takeIf { it.isNotBlank() && it != "-1" }
             Pair(files, next)
         }
 
@@ -733,4 +738,140 @@ class Pan123Api(
             return JSONObject(body)
         }
     }
+    // ---------- 上传 ----------
+
+    /**
+     * 上传一个文件到 [parentFileId] 目录，返回新文件 id。
+     *
+     * 流程：`upload_request`（带整文件 MD5 作 etag，命中 Reuse 即秒传）→
+     * 两条上传路径二选一 → 合并 → 返回 fileId：
+     * - 服务端给 `AccessKeyId/SecretAccessKey` 时走标准 S3 直传（pathStyle + region=123pan）；
+     * - 否则按 16 MiB 分片向服务端换预签名地址，逐片 PUT 后 `upload_complete/v2` 合并。
+     *
+     * ★ 合并请求可能已经生效但响应丢了：这里不做二次合并（重复合并会报错），
+     *   失败交给上层重试——重试会重新走 pre 拿新的 uploadId。
+     */
+    suspend fun upload(
+        io: UploadIo,
+        file: UploadSource,
+        parentFileId: String,
+        token: String
+    ): String = withContext(Dispatchers.IO) {
+        io.progress(UploadPhase.PREPARING)
+        val etag = io.digest("MD5")
+        val preBody = JSONObject()
+            .put("driveId", 0)
+            .put("duplicate", 1)
+            .put("etag", etag)
+            .put("fileName", file.name)
+            .put("parentFileId", parentFileId.toLongOrNull() ?: 0L)
+            .put("size", file.size)
+            .put("type", 0)
+        val pre = postAuth(
+            Pan123Constants.FILE_UPLOAD_REQUEST_URL,
+            "/b/api/file/upload_request",
+            preBody.toString(),
+            token
+        )
+        checkOk(pre, "创建上传任务失败")
+        val data = pre.optJSONObject("data")
+            ?: throw IllegalStateException("123 未返回上传任务")
+        val info = data.optJSONObject("Info")
+        val fileId = info?.optString("FileId").orEmpty()
+            .ifBlank { data.optString("FileId") }
+            .ifBlank { data.optString("fileId") }
+        if (fileId.isBlank() || fileId == "0") throw IllegalStateException(
+            "123 未返回上传文件标识"
+        )
+        if (data.optBoolean("Reuse")) {
+            // 秒传：服务端已有同内容文件，一步到位
+            io.progress(UploadPhase.FINISHING, file.size)
+            return@withContext fileId
+        }
+        if (data.optString("Key").isBlank()) throw IllegalStateException(
+            "123 未创建上传任务"
+        )
+
+        val accessKey = data.optString("AccessKeyId")
+        val secretKey = data.optString("SecretAccessKey")
+        val uploadId = data.optString("UploadId")
+        // 服务端只要给了 uploadId，就优先走「预签名分片」：分片地址由服务端签好，客户端不参与签名，
+        // 不会因为 region / 寻址方式（path-style）猜错而 403。S3 直传是拿不到 uploadId 时的兜底。
+        val direct = uploadId.isBlank() && accessKey.isNotBlank() && secretKey.isNotBlank()
+        if (direct) {
+            io.s3Multipart(
+                endpoint = data.optString("EndPoint"),
+                bucket = data.optString("Bucket"),
+                objectKey = data.optString("Key"),
+                accessKey = accessKey,
+                secretKey = secretKey,
+                region = "123pan",
+                securityToken = data.optString("SessionToken"),
+                pathStyle = true
+            )
+            io.progress(UploadPhase.FINISHING, file.size)
+            val completed = postAuth(
+                Pan123Constants.FILE_UPLOAD_COMPLETE_URL,
+                "/b/api/file/upload_complete",
+                JSONObject().put("fileId", fileId.toLongOrNull() ?: 0L).toString(),
+                token
+            )
+            checkOk(completed, "合并上传分段失败")
+            return@withContext fileId
+        }
+        if (uploadId.isBlank()) throw IllegalStateException("123 未返回上传凭据")
+
+        val common = JSONObject()
+            // 字段必须存在（服务端按 key 判断），缺失时给显式 null 而不是删掉这一项
+            .put("StorageNode", data.opt("StorageNode") ?: JSONObject.NULL)
+            .put("bucket", data.optString("Bucket"))
+            .put("key", data.optString("Key"))
+            .put("uploadId", data.optString("UploadId"))
+        val chunkSize = 16L * 1024 * 1024
+        val count = maxOf(1L, (file.size + chunkSize - 1) / chunkSize)
+        for (index in 0 until count) {
+            val body = JSONObject(common.toString())
+                .put("partNumberStart", (index + 1).toInt())
+                .put("partNumberEnd", (index + 2).toInt())
+            val single = count == 1L
+            val response = postAuth(
+                if (single) Pan123Constants.FILE_S3_UPLOAD_AUTH_URL else Pan123Constants.FILE_S3_REPARE_PARTS_URL,
+                if (single) "/b/api/file/s3_upload_object/auth" else "/b/api/file/s3_repare_upload_parts_batch",
+                body.toString(),
+                token
+            )
+            checkOk(response, "获取上传地址失败")
+            val urls = response.optJSONObject("data")?.optJSONObject("presignedUrls")
+                ?: throw IllegalStateException("123 未返回上传地址")
+            val url = urls.optString((index + 1).toString())
+            if (url.isBlank()) throw IllegalStateException("123 未返回上传地址")
+            val start = index * chunkSize
+            val uploaded = io.send(
+                url = url,
+                method = "PUT",
+                start = start,
+                end = minOf(file.size, start + chunkSize),
+                retries = 1
+            )
+            if (!uploaded.isSuccessful) {
+                throw IllegalStateException(String.format("文件上传失败（HTTP %1\$d）", uploaded.code))
+            }
+        }
+        io.progress(UploadPhase.FINISHING, file.size)
+        val completeBody = JSONObject(common.toString())
+            .put("fileId", fileId.toLongOrNull() ?: 0L)
+            .put("fileSize", file.size)
+            .put("isMultipart", count > 1L)
+        val completed = postAuth(
+            Pan123Constants.FILE_UPLOAD_COMPLETE_V2_URL,
+            "/b/api/file/upload_complete/v2",
+            completeBody.toString(),
+            token
+        )
+        checkOk(completed, "合并上传分段失败")
+        completed.optJSONObject("data")?.optJSONObject("file_info")?.optString("FileId")
+            ?.takeIf { it.isNotBlank() && it != "0" }
+            ?: fileId
+    }
+
 }

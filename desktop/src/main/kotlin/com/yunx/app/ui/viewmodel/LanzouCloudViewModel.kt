@@ -1,5 +1,12 @@
 package com.yunx.app.ui.viewmodel
 
+import com.yunx.app.data.upload.UploadCandidate
+import com.yunx.app.data.upload.UploadDirectoryResolver
+import com.yunx.app.data.upload.UploadProgress
+import com.yunx.app.data.upload.UploadSessionException
+import com.yunx.app.data.upload.UploadRunner
+import com.yunx.app.data.network.HttpClients
+
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -107,10 +114,10 @@ class LanzouCloudViewModel(
 
     /** 取个人盘凭据（Cookie + uid + vei），按 Cookie 复用缓存 */
     private suspend fun creds(): LanzouCreds {
-        val acc = accountRepository.getAccount() ?: throw IllegalStateException("请先登录蓝奏云")
+        val acc = accountRepository.getAccount() ?: throw UploadSessionException("请先登录蓝奏云")
         cachedCreds?.let { if (it.cookie == acc.cookie) return it }
         val params = api.fetchLoginParams(acc.cookie)
-            ?: throw IllegalStateException("蓝奏登录态已失效，请重新登录")
+            ?: throw UploadSessionException("蓝奏登录态已失效，请重新登录")
         return LanzouCreds(acc.cookie, params.uid, params.vei).also { cachedCreds = it }
     }
 
@@ -679,6 +686,52 @@ class LanzouCloudViewModel(
                 _uiState.value = LanzouCloudUiState.Error(e.message ?: "加载失败")
             }
         }
+    }
+
+    // ---------- 上传（蓝奏单次 multipart） ----------
+
+    /** 上传进度（null 表示没有任务）；上传弹窗直接读这里 */
+    val uploadProgress: UploadProgress? get() = uploadRunner.progress
+    val uploadTaskProgress: UploadProgress? get() = uploadRunner.progress ?: uploadRunner.lastResult
+
+    private val uploadRunner = UploadRunner(viewModelScope, { HttpClients.uploadClient() }) { outcome ->
+        // 失败/取消时也刷新：服务端可能已接收文件，但确认响应在途中中断。
+        reloadCurrent()
+        cloudMessage = outcome.message()
+    }
+
+    /**
+     * 上传选中的本地文件到**当前目录**。
+     *
+     * 目标目录在这里就先固定下来（上传期间用户可能切目录、返回上级），
+     * 凭据留到 IO 线程现取，避免拿着已过期的 Cookie 一路失败。
+     */
+    fun uploadFiles(files: List<UploadCandidate>) {
+        val dir = (uiState.value as? LanzouCloudUiState.Loaded)?.dirId ?: return
+        val directories = UploadDirectoryResolver(dir)
+        uploadRunner.startCandidates(files, DownloadPlatform.LANZOU, onRetry = directories::retryFailed) { io, source ->
+            val cred = creds()
+            directories.transfer(source,
+                list = { parent -> api.listCloudFiles(cred.cookie, cred.uid, cred.vei, parent)
+                    .map { if (it.isdir) it.copy(fid = folderNumeric(it.fid)) else it } },
+                create = { parent, name -> api.createFolder(cred.cookie, cred.uid, cred.vei, parent, name) }
+            ) { parent -> api.upload(io, source, parent, cred.cookie, cred.uid, cred.vei) }
+        }
+    }
+
+    /** 取消当前上传（正在发的那一段会立刻被打断） */
+    fun cancelUpload() = uploadRunner.cancel()
+
+    fun appendUploadFiles(files: List<UploadCandidate>, batchId: Long): Int = uploadRunner.appendCandidates(files, batchId)
+
+    fun retryFailedUploads(batchId: Long): Int = uploadRunner.retryFailed(batchId)
+    fun retryUploadFile(batchId: Long, candidate: UploadCandidate): Int = uploadRunner.retrySingle(batchId, candidate)
+
+    fun dismissUploadResult(batchId: Long) = uploadRunner.dismissResult(batchId)
+
+    override fun onCleared() {
+        uploadRunner.cancel()
+        super.onCleared()
     }
 
     class Factory(

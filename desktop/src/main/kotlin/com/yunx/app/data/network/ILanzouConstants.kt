@@ -59,4 +59,9 @@ object ILanzouConstants {
     /** 文件夹 id 前缀 d: / 文件 id 前缀 f:（文档 §3.1 ID 规范） */
     const val FOLDER_PREFIX = "d:"
     const val FILE_PREFIX = "f:"
+    // 原生上传协议
+    const val UPLOAD_TOKEN = "$API_BASE/proved/7n/getUpToken"
+    const val QINIU_UPLOAD = "https://upload.qiniup.com"
+    const val QINIU_BUCKET = "wpanstore-lanzou"
+    const val UPLOAD_RESULT = "$API_BASE/unproved/7n/results"
 }

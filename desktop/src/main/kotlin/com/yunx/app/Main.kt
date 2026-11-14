@@ -143,6 +143,7 @@ fun main(args: Array<String>) {
     // 再尽力释放 JCEF
     Runtime.getRuntime().addShutdownHook(
         Thread {
+            com.yunx.app.data.upload.UploadSessions.cancelAll()
             // 正常退出标记：下次日志里如果「有 diagnostic_session_start 却没有 session_end」，
             // 说明上次是被原生层直接带走的（Java 侧来不及写任何东西）
             runCatching { com.yunx.app.util.DiagnosticLog.sessionEnd() }

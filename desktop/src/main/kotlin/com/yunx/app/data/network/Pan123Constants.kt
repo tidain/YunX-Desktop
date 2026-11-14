@@ -113,4 +113,9 @@ object Pan123Constants {
 
     /** 永久分享的过期时间（文档 §5.10：永久=2099-12-12T08:00:00+08:00） */
     const val EXPIRATION_FOREVER = "2099-12-12T08:00:00+08:00"
+    // 原生上传协议
+    const val FILE_UPLOAD_COMPLETE_URL = "$API_BASE/b/api/file/upload_complete"
+    const val FILE_S3_UPLOAD_AUTH_URL = "$API_BASE/b/api/file/s3_upload_object/auth"
+    const val FILE_S3_REPARE_PARTS_URL = "$API_BASE/b/api/file/s3_repare_upload_parts_batch"
+    const val FILE_UPLOAD_COMPLETE_V2_URL = "$API_BASE/b/api/file/upload_complete/v2"
 }

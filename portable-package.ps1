@@ -216,10 +216,7 @@ foreach ($unused in @("lib\jvm.lib", "bin\splashscreen.dll")) {
 
 Write-Host ""
 Write-Host "[4/5] Creating app-image with jpackage (YunX-Desktop.exe)..." -ForegroundColor Cyan
-# 打包前先杀运行中的实例：YunX-Desktop.exe / java 子进程 / JCEF 助手会锁住输出目录下的 jar 和运行时文件
-Get-Process YunX-Desktop -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-Get-Process | Where-Object { $_.Path -like "*\release\YunX-Desktop\*" } | Stop-Process -Force -ErrorAction SilentlyContinue
-Get-Process jcef_helper -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+# 保留运行中的上传、下载及其他程序的 JCEF；输出目录被占用时提示手动退出。
 # 资源管理器/杀软可能短暂占用句柄，删除旧输出目录需重试
 $removed = $false
 for ($i = 1; $i -le 6; $i++) {

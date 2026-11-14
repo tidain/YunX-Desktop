@@ -281,4 +281,7 @@ object Pan115Constants {
         if (index < 0) return token to ""
         return token.substring(0, index) to token.substring(index + 1)
     }
+    // 原生上传协议
+    const val UPLOAD_MAX_SIZE: Long = 5L * 1024 * 1024 * 1024
+    const val UPLOAD_INIT_URL = "https://uplb.115.com/3.0/sampleinitupload.php"
 }

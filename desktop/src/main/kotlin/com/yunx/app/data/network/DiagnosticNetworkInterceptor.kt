@@ -1,5 +1,7 @@
 package com.yunx.app.data.network
 
+import com.yunx.app.data.upload.UploadIo
+
 import com.yunx.app.util.DiagnosticLog
 import okhttp3.Interceptor
 import okhttp3.Response
@@ -22,7 +24,9 @@ import okio.BufferedSink
 class DiagnosticNetworkInterceptor : Interceptor {
 
     override fun intercept(chain: Interceptor.Chain): Response {
-        if (!DiagnosticLog.isEnabled()) return chain.proceed(chain.request())
+        // 上传控制响应可能含临时密钥；文件体不可被诊断逻辑提前读取或重复读取。
+        if (chain.request().tag(UploadIo::class.java) != null || UploadIo.current() != null ||
+            !DiagnosticLog.isEnabled()) return chain.proceed(chain.request())
 
         val request = chain.request()
         // 请求体要在发出去之前复制一份（发完就拿不到了）；只在体积可控时才复制，避免大上传吃内存

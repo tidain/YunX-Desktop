@@ -141,9 +141,14 @@ fun ResolveScreen(
     // 链接历史弹窗可见性（输入页 / 详情页都可触发，故挂载在父层）
     var showHistory by remember { mutableStateOf(false) }
 
-    // 视频链接优先分流：抖音/快手/B站等域名交给视频解析页，其余仍走网盘/GitHub 解析
+    // 视频链接优先分流：抖音/快手/B站等域名交给视频解析页，其余仍走网盘/GitHub 解析。
+    // 一段文案里有多个网盘分享链接时交给批量解析，避免首个视频/GitHub 链接把后面的分享链接挡住。
     val resolveLink: (String, String?) -> Unit = { text, code ->
-        if (VideoLinkParser.looksLikeVideoLink(text)) onVideoLink(text) else viewModel.startResolve(text, code)
+        when {
+            ShareLinkParser.parseAll(text).size > 1 -> viewModel.startResolve(text, code)
+            VideoLinkParser.looksLikeVideoLink(text) -> onVideoLink(text)
+            else -> viewModel.startResolve(text, code)
+        }
     }
 
     // 剪贴板分享链接提示状态：待提示的剪贴板文本 + 已忽略的文本
@@ -385,11 +390,13 @@ fun ResolveScreen(
         ) {
             animatedSuggestion?.let { suggestion ->
                 val parsed = ShareLinkParser.parse(suggestion)
+                val batchCount = ShareLinkParser.parseAll(suggestion).size
                 val githubParsed = GitHubLinkParser.parse(suggestion)
                 val videoParsed = VideoLinkParser.parse(suggestion)
                 ClipboardSuggestCard(
                     // 标题按识别结果给（视频链接此前一律显示成「网盘」，用户会误解）
                     title = when {
+                        batchCount > 1 -> "检测到 $batchCount 个分享链接"
                         githubParsed != null -> "检测到 GitHub 分享链接"
                         parsed != null -> "检测到 ${platformLabel(parsed.platform)}分享链接"
                         videoParsed != null -> "检测到 ${videoParsed.platform.displayName} 视频链接"
@@ -398,6 +405,13 @@ fun ResolveScreen(
                     onPaste = {
                         clipboardSuggestion = null
                         when {
+                            // 多条分享链接交给批量解析（首条打开，其余写入解析历史）
+                            batchCount > 1 -> {
+                                link = suggestion
+                                pwd = parsed?.pwd.orEmpty()
+                                pwdEdited = true
+                                viewModel.startResolve(suggestion, parsed?.pwd)
+                            }
                             // GitHub 链接走 ViewModel 的 GitHub 解析入口（复用 ShareDetailScreen 框架）
                             githubParsed != null -> {
                                 link = suggestion
@@ -562,12 +576,17 @@ private fun ResolveInputContent(
 
         Button(
             onClick = {
-                // 优先识别 GitHub 链接（仓库 / 账号 / 文件直链），走 ViewModel 的 GitHub 解析入口
-                val github = GitHubLinkParser.parse(link)
-                if (github != null) {
-                    viewModel.startGitHubResolve(github)
+                // 多个分享链接优先批量解析，避免 GitHub / 视频分支只处理第一条
+                if (ShareLinkParser.parseAll(link).size > 1) {
+                    viewModel.startResolve(link, pwd)
                 } else {
-                    onResolve(link, pwd)
+                    // 优先识别 GitHub 链接（仓库 / 账号 / 文件直链），走 ViewModel 的 GitHub 解析入口
+                    val github = GitHubLinkParser.parse(link)
+                    if (github != null) {
+                        viewModel.startGitHubResolve(github)
+                    } else {
+                        onResolve(link, pwd)
+                    }
                 }
             },
             modifier = Modifier

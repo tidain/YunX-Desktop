@@ -34,4 +34,44 @@ class ShareLinkParserTest {
     fun rejectsUnrelatedUrl() {
         assertNull(ShareLinkParser.parse("https://example.com/s/Abc123"))
     }
+
+    @Test
+    fun parseAllFindsEveryLinkInOrder() {
+        val text = """
+            看这个 https://pan.quark.cn/s/Quark123 提取码：aa11
+            还有 https://drive.uc.cn/s/Uc456 密码: bb22
+            以及 https://example.com/s/ignored
+        """.trimIndent()
+
+        val links = ShareLinkParser.parseAll(text)
+
+        assertEquals(2, links.size)
+        assertEquals(SharePlatform.QUARK, links[0].share.platform)
+        assertEquals("Quark123", links[0].share.shareId)
+        assertEquals("aa11", links[0].share.pwd)
+        assertEquals(SharePlatform.UC, links[1].share.platform)
+        assertEquals("Uc456", links[1].share.shareId)
+        assertEquals("bb22", links[1].share.pwd)
+    }
+
+    @Test
+    fun parseSkipsUnsupportedLeadingUrl() {
+        val parsed = ShareLinkParser.parse(
+            "https://example.com/s/nothing https://pan.baidu.com/s/1Real123?pwd=abcd"
+        )!!
+
+        assertEquals(SharePlatform.BAIDU, parsed.platform)
+        assertEquals("Real123", parsed.shareId)
+        assertEquals("abcd", parsed.pwd)
+    }
+
+    @Test
+    fun parseAllDeduplicatesSameUrl() {
+        val links = ShareLinkParser.parseAll(
+            "https://pan.quark.cn/s/Same123 提取码：aa11 https://pan.quark.cn/s/Same123"
+        )
+
+        assertEquals(1, links.size)
+        assertEquals("aa11", links[0].share.pwd)
+    }
 }

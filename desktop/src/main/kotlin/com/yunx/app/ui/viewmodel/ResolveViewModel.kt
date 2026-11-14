@@ -34,6 +34,7 @@ import com.yunx.app.data.network.Pan123Constants
 import com.yunx.app.data.network.QuarkConstants
 import com.yunx.app.data.network.QuarkCdn
 import com.yunx.app.data.network.GitHubMirror
+import com.yunx.app.data.network.ShareLinkMatch
 import com.yunx.app.data.network.ShareLinkParser
 import com.yunx.app.data.network.SharePlatform
 import com.yunx.app.data.network.StarSeaApi
@@ -744,7 +745,9 @@ class ResolveViewModel(
     private var currentPlatform: SharePlatform = SharePlatform.QUARK
 
     /** 当前平台凭证（夸克/UC/百度/139/115 用 cookie，迅雷/123 用 access_token；GitHub 无需凭证） */
-    private suspend fun currentCredential(): String? = when (currentPlatform) {
+    private suspend fun currentCredential(): String? = credentialFor(currentPlatform)
+
+    private suspend fun credentialFor(platform: SharePlatform): String? = when (platform) {
         SharePlatform.UC -> ucAccountRepository.getAccount()?.cookie
         SharePlatform.XUNLEI -> xunleiAccountRepository.getAccount()?.accessToken
         SharePlatform.BAIDU -> baiduAccountRepository.getAccount()?.cookie
@@ -758,7 +761,9 @@ class ResolveViewModel(
         else -> accountRepository.getAccount()?.cookie
     }
 
-    private fun currentRepo(): ShareResolveRepository = when (currentPlatform) {
+    private fun currentRepo(): ShareResolveRepository = repoFor(currentPlatform)
+
+    private fun repoFor(platform: SharePlatform): ShareResolveRepository = when (platform) {
         SharePlatform.UC -> ucResolveRepository
         SharePlatform.XUNLEI -> xunleiResolveRepository
         SharePlatform.BAIDU -> baiduResolveRepository
@@ -882,9 +887,19 @@ class ResolveViewModel(
     /** 最近一次 startResolve 的原文（口令转换之前），失败时原样回填 */
     private var lastResolveInput: String = ""
 
+    /** 批量分享链接一次最多处理 10 条（含界面打开的第一条），避免误贴长列表时请求过多。 */
+    private val maxBatchShareLinks = 10
+
     /** 开始解析：链接 → token →（密码）→ 根目录列表 */
     fun startResolve(link: String, pwd: String?) {
         lastResolveInput = link
+        // 一段文案里有多条网盘分享链接时，全部解析并写入历史，界面仍打开第一条。
+        // 单链接 / 口令 / 视频 / GitHub 等既有入口不受影响。
+        val batchLinks = ShareLinkParser.parseAll(link)
+        if (batchLinks.size > 1) {
+            startResolveBatch(batchLinks, pwd)
+            return
+        }
         currentLink = link
         currentPwd = pwd
         // 写入当前分享链接，供下载入队时兜底填充 task.shareUrl（右键菜单「复制分享链接」用）
@@ -955,20 +970,60 @@ class ResolveViewModel(
     }
 
     /**
+     * 批量分享链接：先按单链接流程打开第一条，其余在后台逐个建会话并写入解析历史。
+     * 这样用户不用重复粘贴，历史记录里可以直接点开后续链接。
+     */
+    private fun startResolveBatch(matches: List<ShareLinkMatch>, pwd: String?) {
+        val first = matches.firstOrNull() ?: return
+        startResolve(first.url, first.share.pwd ?: pwd)
+
+        val rest = matches.drop(1).take(maxBatchShareLinks - 1)
+        if (rest.isEmpty()) return
+        viewModelScope.launch {
+            var ok = 0
+            var failed = 0
+            for (match in rest) {
+                val linkPwd = match.share.pwd ?: pwd
+                val result = try {
+                    val credential = credentialFor(match.share.platform).orEmpty()
+                    repoFor(match.share.platform).createSession(match.url, linkPwd, credential)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Result.failure<ShareSession>(e)
+                }
+                result.onSuccess { session ->
+                    runCatching { recordLinkHistory(match.url, match.share.platform, linkPwd, session.title) }
+                    ok++
+                }.onFailure { failed++ }
+            }
+            val truncated = matches.size - 1 - rest.size
+            val failText = if (failed > 0) "，$failed 个失败" else ""
+            val truncText = if (truncated > 0) "（另有 $truncated 个未处理）" else ""
+            SnackbarController.show("已解析其余 $ok 个链接$failText，可在解析历史中打开$truncText")
+        }
+    }
+
+    /**
      * 记录解析历史到 link_history 表：同 URL 在 1 小时内已存在则跳过（避免重复解析污染历史）。
      * 失败静默忽略（不阻断主流程）。
      */
     private suspend fun recordLinkHistory(title: String) {
         val link = currentLink?.takeIf { it.isNotBlank() } ?: return
-        val existing = linkHistoryDao.search(link).first()
+        recordLinkHistory(link, currentPlatform, currentPwd, title)
+    }
+
+    private suspend fun recordLinkHistory(url: String, platform: SharePlatform, pwd: String?, title: String) {
+        if (url.isBlank()) return
+        val existing = linkHistoryDao.search(url).first()
         val latest = existing.maxByOrNull { it.createTime }
         if (latest != null && System.currentTimeMillis() - latest.createTime < 60 * 60 * 1000) return
         linkHistoryDao.insert(
             LinkHistoryEntity(
-                url = link,
-                title = title.ifBlank { link },
-                platform = currentPlatform.name,
-                pwd = currentPwd.orEmpty()
+                url = url,
+                title = title.ifBlank { url },
+                platform = platform.name,
+                pwd = pwd.orEmpty()
             )
         )
     }

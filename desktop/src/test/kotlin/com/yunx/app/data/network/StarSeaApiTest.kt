@@ -29,6 +29,25 @@ class StarSeaApiTest {
     }
 
     @Test
+    fun `磁力与 ed2k 等伪协议不当口令`() {
+        // issue #86：磁力 / ed2k 曾被当成中文口令发给星海，服务端返回 502
+        assertFalse(
+            StarSeaApi.looksLikeCommand(
+                "magnet:?xt=urn:btih:0123456789ABCDEF0123456789ABCDEF01234567&dn=Example"
+            )
+        )
+        assertFalse(
+            StarSeaApi.looksLikeCommand(
+                "ed2k://|file|Example.avi|734003200|0123456789ABCDEF0123456789ABCDEF|/"
+            )
+        )
+        assertFalse(StarSeaApi.looksLikeCommand("thunder://QUFodHRwOi8vZXhhbXBsZS5jb20vYS56aXBaWg=="))
+        assertFalse(StarSeaApi.looksLikeCommand("ftp://example.com/a.zip"))
+        // 中文口令里的全角冒号不受影响
+        assertTrue(StarSeaApi.looksLikeCommand("口令：张三丰资源"))
+    }
+
+    @Test
     fun `pwdId 合成应用现有链路认得的分享链接`() {
         assertEquals("https://pan.quark.cn/s/81c7b58ff633", StarSeaApi.shareLinkFor("qk", "81c7b58ff633"))
         assertEquals("https://drive.uc.cn/s/81c7b58ff633", StarSeaApi.shareLinkFor("uc", "81c7b58ff633"))

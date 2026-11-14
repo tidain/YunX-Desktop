@@ -37,17 +37,22 @@ object StarSeaApi {
         val pwdId: String
     )
 
+    /** URI scheme（`http:` / `magnet:` / `ed2k:` / `thunder:` …）：这类文本不是口令 */
+    private val URI_SCHEME = Regex("""^[A-Za-z][A-Za-z0-9+.\-]*:""")
+
     /**
      * 该不该把这段文本按「中文口令」去问星海（纯逻辑，可单测）。
      *
      * 否则用户随手粘贴一段普通文案也会打一次第三方接口、并把正文发出去。
-     * 判定：非空、不超过 [StarSeaConstants.MAX_COMMAND_LENGTH]、且**自身不是 URL**
-     * （是 URL 的话说明本地 [ShareLinkParser] 没认出来，那不是口令，问星海也没用）。
+     * 判定：非空、不超过 [StarSeaConstants.MAX_COMMAND_LENGTH]、且**自身不是 URI**
+     * （网盘/磁力/ed2k/迅雷等伪协议说明本地解析器没认出来，那不是口令，问星海也没用；
+     *   尤其是磁力 / ed2k 链接，之前会被当成口令发给第三方，服务端返回 502）。
      */
     fun looksLikeCommand(text: String): Boolean {
         val t = text.trim()
         if (t.isEmpty() || t.length > StarSeaConstants.MAX_COMMAND_LENGTH) return false
         if (t.contains("http://", ignoreCase = true) || t.contains("https://", ignoreCase = true)) return false
+        if (URI_SCHEME.containsMatchIn(t)) return false
         return true
     }
 

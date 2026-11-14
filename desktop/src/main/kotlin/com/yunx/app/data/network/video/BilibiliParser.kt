@@ -16,7 +16,6 @@ import org.json.JSONObject
  *    取单文件 `durl[0]`，能直接下载播放，代价是清晰度偏低。
  *
  * ★ 已知限制：
- * - 只解析**第一个分P**（多 P 视频后续可按 `pages[]` 展开）；
  * - 番剧/课程（`bangumi/play`、`cheese/play`）不在识别范围内，需要完全不同的接口与登录态；
  * - 若 B 站把 `playurl` 也改成必须 WBI 签名，此接口需要换成带签名版本（见 Agent.md 的 TODO）。
  */
@@ -30,6 +29,33 @@ object BilibiliParser : VideoParser, QualitySelectableParser {
 
     /** DASH 视频流的编码编号：7 = AVC(H.264)，12 = HEVC，13 = AV1 */
     private const val CODEC_AVC = 7
+
+    /** 分P查询参数：`?p=2` / `&p=2`（B 站分P从 1 开始） */
+    private val pageParam = Regex("""[?&]p=(\d+)""", RegexOption.IGNORE_CASE)
+
+    /** 链接里请求的分P编号；没带 `p` 或值非法时按第一P处理 */
+    internal fun requestedPage(link: DetectedVideoLink): Int =
+        pageParam.find(link.url)?.groupValues?.getOrNull(1)?.toIntOrNull()
+            ?.takeIf { it > 0 } ?: 1
+
+    /**
+     * 从 `pages[]` 里取请求的分P。
+     *
+     * `pages[]` 通常按 page 编号升序，但这里仍以每项的 `page` 字段为准；老数据缺字段时
+     * 退回 1-based 下标。请求越界（或编号不存在）时回到第一P，保持未带 p 时的旧行为。
+     */
+    internal fun resolvePage(data: JSONObject, requestedPage: Int): JSONObject? {
+        val pages = data.optJSONArray("pages") ?: return null
+        val count = pages.length()
+        if (count == 0) return null
+        val requested = requestedPage.coerceAtLeast(1)
+        for (i in 0 until count) {
+            val page = pages.optJSONObject(i) ?: continue
+            if (page.optInt("page", -1) == requested) return page
+        }
+        val index = requested - 1
+        return pages.optJSONObject(if (index in 0 until count) index else 0)
+    }
 
     /** 页面/接口请求头：Referer 必须是 bilibili.com，否则会被风控挡 */
     private fun apiHeaders(cookie: String): Map<String, String> = buildMap {
@@ -95,13 +121,17 @@ object BilibiliParser : VideoParser, QualitySelectableParser {
             ?: throw VideoParseException(VideoParseErrorKind.UNKNOWN, "B站视频信息缺少 data 字段")
 
         val bvid = data.optString("bvid")
-        val cid = data.optJSONArray("pages")?.optJSONObject(0)?.optLong("cid") ?: data.optLong("cid")
+        val requestedPage = requestedPage(link)
+        val page = resolvePage(data, requestedPage)
+        val cid = page?.optLong("cid")?.takeIf { it > 0L } ?: data.optLong("cid")
         if (bvid.isBlank() || cid <= 0L) {
             throw VideoParseException(VideoParseErrorKind.UNKNOWN, "B站视频信息缺少 bvid/cid")
         }
 
         val title = data.optString("title")
-        val fileBase = fileNameBase(title, "bilibili_$bvid")
+        val pageNumber = page?.optInt("page", requestedPage)?.takeIf { it > 0 } ?: requestedPage
+        val fileBase = fileNameBase(title, "bilibili_$bvid") +
+            if (pageNumber > 1) "_P$pageNumber" else ""
 
         // ① 已登录才试 DASH 高清：音视频分离的两路流，下载时由 DashMuxer 合轨。
         //    ★ 未登录不试：匿名拿到的 DASH 往往也是最低清，不值得为它引入更长、更易失败的合轨链路。
@@ -123,7 +153,8 @@ object BilibiliParser : VideoParser, QualitySelectableParser {
                         previewUrl = mergedPreviewUrl(bvid, cid, cookie)
                     ),
                     qualities = dash.qualities,
-                    selectedQn = dash.quality
+                    selectedQn = dash.quality,
+                    pageNumber = pageNumber
                 )
             }
         }
@@ -162,7 +193,8 @@ object BilibiliParser : VideoParser, QualitySelectableParser {
                 quality = qualityLabel(playData.optInt("quality"))
             ),
             qualities = qualityOptions(playData),
-            selectedQn = playData.optInt("quality")
+            selectedQn = playData.optInt("quality"),
+            pageNumber = pageNumber
         )
     }
 
@@ -172,7 +204,8 @@ object BilibiliParser : VideoParser, QualitySelectableParser {
         bvid: String,
         media: VideoMedia,
         qualities: List<VideoQuality> = emptyList(),
-        selectedQn: Int = 0
+        selectedQn: Int = 0,
+        pageNumber: Int = 1
     ): VideoParseResult =
         VideoParseResult(
             platform = platform,
@@ -182,7 +215,7 @@ object BilibiliParser : VideoParser, QualitySelectableParser {
             cover = httpsUrl(data.optString("pic")),
             text = data.optString("desc"),
             timestampSeconds = data.optLong("pubdate"),
-            url = "https://www.bilibili.com/video/$bvid",
+            url = "https://www.bilibili.com/video/$bvid" + if (pageNumber > 1) "?p=$pageNumber" else "",
             medias = listOf(media),
             qualities = qualities,
             selectedQn = selectedQn

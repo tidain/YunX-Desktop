@@ -220,6 +220,18 @@ object DesktopActions {
         }
     }.getOrNull()
 
+    /** 上传混选入口；调用方在 EDT 打开，取消返回空列表，类型由上传扫描器识别。 */
+    fun pickUploadSources(): List<File> {
+        try { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()) } catch (_: Exception) {}
+        val chooser = JFileChooser(defaultDownloadDir).apply {
+            fileSelectionMode = JFileChooser.FILES_AND_DIRECTORIES
+            isMultiSelectionEnabled = true
+            dialogTitle = "选择要上传的文件或文件夹"
+            approveButtonText = "选择"
+        }
+        return if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) chooser.selectedFiles.toList() else emptyList()
+    }
+
     /**
      * 弹出文件选择对话框（导入备份等）。
      *

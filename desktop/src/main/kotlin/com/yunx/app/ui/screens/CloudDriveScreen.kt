@@ -1,5 +1,11 @@
 package com.yunx.app.ui.screens
 
+import com.yunx.app.ui.components.UploadDialogs
+import com.yunx.app.ui.components.UploadDropHint
+import com.yunx.app.ui.components.UploadIconButton
+import com.yunx.app.ui.components.rememberUploadUi
+import com.yunx.app.ui.components.uploadDropTarget
+
 import com.yunx.app.ui.SnackbarController
 import com.yunx.app.ui.BackHandler
 import com.yunx.app.ui.theme.Motion
@@ -85,11 +91,22 @@ fun CloudDriveScreen(
     modifier: Modifier = Modifier
 ) {
     val state by viewModel.uiState.collectAsState()
+    val uploadDirectory = state as? QuarkCloudUiState.Loaded
+    val uploadEnabled = uploadDirectory != null && !viewModel.multiSelectMode && !viewModel.isOperating
+    val uploadUi = rememberUploadUi(
+        destinationKey = uploadDirectory?.dirFid,
+        destination = (listOf("夸克网盘") + uploadDirectory?.pathNames.orEmpty()).joinToString(" / "),
+        enabled = uploadEnabled,
+        progress = viewModel.uploadProgress,
+        onAppend = viewModel::appendUploadFiles,
+        onUpload = viewModel::uploadFiles
+    )
     // 系统返回键 → 子目录返回上一级，根目录返回账号列表（对齐解析页返回行为）
     BackHandler {
         val s = state
         if (s is QuarkCloudUiState.Loaded && s.pathNames.isNotEmpty()) viewModel.back() else onExit()
     }
+    UploadDialogs(uploadUi, viewModel.uploadProgress, viewModel::cancelUpload)
     // 文件列表滚动状态（返回顶部按钮用）
     val listState = rememberLazyListState()
     // 批量操作弹窗（多选模式底部栏触发：分享/移动需要设置或选目录，下载/删除直接执行）
@@ -167,7 +184,7 @@ fun CloudDriveScreen(
                 }
             }
 
-            is QuarkCloudUiState.Loaded -> Box(modifier = Modifier.fillMaxSize()) {
+            is QuarkCloudUiState.Loaded -> Box(modifier = Modifier.fillMaxSize().uploadDropTarget(uploadUi)) {
                 LazyColumn(
                     state = listState,
                     modifier = Modifier
@@ -221,6 +238,7 @@ fun CloudDriveScreen(
                                 )
                             }
                             // 新建文件夹入口（窗口内覆盖层输入）
+                            UploadIconButton(onClick = uploadUi::open, enabled = uploadEnabled)
                             IconButton(onClick = { showCreateFolder = true }) {
                                 Icon(
                                     imageVector = Icons.Outlined.CreateNewFolder,
@@ -240,6 +258,7 @@ fun CloudDriveScreen(
                             pathNames = s.pathNames,
                             onNavigate = { viewModel.navigateToLevel(it) }
                         )
+                        UploadDropHint(uploadUi, uploadEnabled)
                     }
                 }
             }

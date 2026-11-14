@@ -92,7 +92,8 @@ fun FadeAlertDialog(
     title: (@Composable () -> Unit)? = null,
     text: (@Composable () -> Unit)? = null,
     confirmButton: @Composable () -> Unit = {},
-    dismissButton: (@Composable () -> Unit)? = null
+    dismissButton: (@Composable () -> Unit)? = null,
+    constrainTextHeight: Boolean = false
 ) {
     // 是否仍需渲染内容（淡出动画期间保持渲染，结束后注销）
     var composed by remember { mutableStateOf(false) }
@@ -137,6 +138,7 @@ fun FadeAlertDialog(
     val currentText by rememberUpdatedState(text)
     val currentConfirm by rememberUpdatedState(confirmButton)
     val currentDismiss by rememberUpdatedState(dismissButton)
+    val currentConstrainTextHeight by rememberUpdatedState(constrainTextHeight)
 
     val entry = remember {
         OverlayDialogRegistry.Entry {
@@ -147,7 +149,8 @@ fun FadeAlertDialog(
                 title = currentTitle,
                 text = currentText,
                 confirmButton = currentConfirm,
-                dismissButton = currentDismiss
+                dismissButton = currentDismiss,
+                constrainTextHeight = currentConstrainTextHeight
             )
         }
     }
@@ -169,7 +172,8 @@ private fun DialogSurface(
     title: (@Composable () -> Unit)?,
     text: (@Composable () -> Unit)?,
     confirmButton: @Composable () -> Unit,
-    dismissButton: (@Composable () -> Unit)?
+    dismissButton: (@Composable () -> Unit)?,
+    constrainTextHeight: Boolean
 ) {
     // 遮罩层：点击空白处关闭。
     // alpha 全程只在绘制阶段读取（graphicsLayer），动画期间零重组、零布局，
@@ -220,7 +224,12 @@ private fun DialogSurface(
                 title?.let {
                     Box(modifier = Modifier.padding(bottom = 16.dp)) { it() }
                 }
-                text?.invoke()
+                if (constrainTextHeight) {
+                    // 先为标题和按钮留出空间，再约束包含可滚动列表的正文。
+                    Box(Modifier.weight(1f, fill = false)) { text?.invoke() }
+                } else {
+                    text?.invoke()
+                }
                 Spacer(modifier = Modifier.height(24.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),

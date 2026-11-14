@@ -1,5 +1,8 @@
 package com.yunx.app.data.network
 
+import com.yunx.app.data.upload.UploadIo
+import com.yunx.app.data.upload.UploadSource
+
 import com.yunx.app.data.network.model.DownloadLink
 import com.yunx.app.data.network.model.PlayLink
 import com.yunx.app.data.network.model.QuotaInfo
@@ -872,4 +875,39 @@ suspend fun getDownloadLink(fid: String, cookie: String): DownloadLink? = withCo
         val merged = UCCookieUtil.mergeFromSetCookies(original, setCookies)
         if (merged != original) cookieSink?.invoke(merged, original)
     }
+    // ---------- 上传 ----------
+
+    /** 上传文件到 [parentFid] 目录（与夸克同一套 OSS 协议，仅域名/`pr` 不同）。 */
+    suspend fun upload(
+        io: UploadIo,
+        file: UploadSource,
+        parentFid: String,
+        cookie: String
+    ): String? = withContext(Dispatchers.IO) {
+        QuarkUpload(
+            apiBase = UCConstants.API_BASE,
+            product = "UCBrowser",
+            origin = UCConstants.WEB_ORIGIN,
+            userAgent = UCConstants.USER_AGENT,
+            post = { url, body -> postJsonRaw(url, cookie, body) }
+        ).upload(io, file, parentFid)
+    }
+
+    /** 上传链路专用：同 [parseData] 的 status 校验，但允许响应没有 data。 */
+    private fun postJsonRaw(url: String, cookie: String, body: JSONObject): JSONObject {
+        val request = postJson(url, cookie, body.toString())
+        val response = client.newCall(request).execute()
+        val text = response.use {
+            mergeCookieFromResponse(request, it)
+            it.body?.string() ?: throw QuarkApiException("请求失败：响应为空")
+        }
+        val json = runCatching { JSONObject(text) }.getOrElse {
+            throw QuarkApiException(String.format("响应解析失败（HTTP %1\$d）", response.code))
+        }
+        if (json.optInt("status") != 200) {
+            throw QuarkApiException(json.optString("message").ifBlank { "上传请求失败" })
+        }
+        return json.optJSONObject("data") ?: JSONObject()
+    }
+
 }

@@ -1,5 +1,13 @@
 package com.yunx.app.ui.viewmodel
 
+import com.yunx.app.data.upload.UploadCandidate
+import com.yunx.app.data.upload.UploadDirectoryResolver
+import com.yunx.app.data.upload.uploadDirectoryEntries
+import com.yunx.app.data.upload.UploadProgress
+import com.yunx.app.data.upload.UploadSessionException
+import com.yunx.app.data.upload.UploadRunner
+import com.yunx.app.data.network.HttpClients
+
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -87,7 +95,7 @@ class Pan123CloudViewModel(
     }
 
     private suspend fun token(): String =
-        tokenProvider() ?: throw IllegalStateException("请先登录123云盘")
+        tokenProvider() ?: throw UploadSessionException("请先登录123云盘")
 
     // ---------- 目录浏览 ----------
 
@@ -646,6 +654,51 @@ class Pan123CloudViewModel(
         7 -> ShareExpire.SEVEN_DAYS
         30 -> ShareExpire.THIRTY_DAYS
         else -> ShareExpire.UNKNOWN
+    }
+
+    // ---------- 上传（123 预签名/S3 分片） ----------
+
+    /** 上传进度（null 表示没有任务）；上传弹窗直接读这里 */
+    val uploadProgress: UploadProgress? get() = uploadRunner.progress
+    val uploadTaskProgress: UploadProgress? get() = uploadRunner.progress ?: uploadRunner.lastResult
+
+    private val uploadRunner = UploadRunner(viewModelScope, { HttpClients.uploadClient() }) { outcome ->
+        // 失败/取消时也刷新：服务端可能已接收文件，但确认响应在途中中断。
+        reloadCurrent()
+        cloudMessage = outcome.message()
+    }
+
+    /**
+     * 上传选中的本地文件到**当前目录**。
+     *
+     * 目标目录在这里就先固定下来（上传期间用户可能切目录、返回上级），
+     * 凭据留到 IO 线程现取，避免拿着已过期的 Cookie 一路失败。
+     */
+    fun uploadFiles(files: List<UploadCandidate>) {
+        val dir = (uiState.value as? Pan123CloudUiState.Loaded)?.dirId ?: return
+        val directories = UploadDirectoryResolver(dir)
+        uploadRunner.startCandidates(files, DownloadPlatform.PAN123, onRetry = directories::retryFailed) { io, source ->
+            val token = token()
+            directories.transfer(source,
+                list = { parent -> uploadDirectoryEntries { cursor -> api.listCloudFiles(parent, token, cursor ?: "0") } },
+                create = { parent, name -> api.createDir(parent, name, token) }
+            ) { parent -> api.upload(io, source, parent, token) }
+        }
+    }
+
+    /** 取消当前上传（正在发的那一段会立刻被打断） */
+    fun cancelUpload() = uploadRunner.cancel()
+
+    fun appendUploadFiles(files: List<UploadCandidate>, batchId: Long): Int = uploadRunner.appendCandidates(files, batchId)
+
+    fun retryFailedUploads(batchId: Long): Int = uploadRunner.retryFailed(batchId)
+    fun retryUploadFile(batchId: Long, candidate: UploadCandidate): Int = uploadRunner.retrySingle(batchId, candidate)
+
+    fun dismissUploadResult(batchId: Long) = uploadRunner.dismissResult(batchId)
+
+    override fun onCleared() {
+        uploadRunner.cancel()
+        super.onCleared()
     }
 
     class Factory(

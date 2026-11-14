@@ -139,6 +139,8 @@ tasks.named<ProcessResources>("processResources") {
 tasks.withType<Test> {
     useJUnit()
     jvmArgs("-Dfile.encoding=UTF-8", "-Dsun.jnu.encoding=UTF-8")
+    systemProperty("java.util.prefs.PreferencesFactory", "com.yunx.app.TestPreferencesFactory")
+    environment("YUNX_DESKTOP_DATA_DIR", layout.buildDirectory.dir("test-data").get().asFile.absolutePath)
 }
 
 // 本机工作目录含非 ASCII 字符时，Gradle 测试 worker 的 classpath 传递会乱码（测试类 ClassNotFound），
@@ -151,7 +153,18 @@ tasks.register<JavaExec>("testInProcess") {
     dependsOn("compileTestKotlin")
     mainClass.set("org.junit.runner.JUnitCore")
     classpath = testInProcessClasspath
+    maxHeapSize = "512m"
+    jvmArgs("-Dfile.encoding=UTF-8", "-Dsun.jnu.encoding=UTF-8")
+    systemProperty("java.util.prefs.PreferencesFactory", "com.yunx.app.TestPreferencesFactory")
+    environment("YUNX_DESKTOP_DATA_DIR", layout.buildDirectory.dir("test-data").get().asFile.absolutePath)
     args = listOf(
+        "com.yunx.app.data.upload.UploadSelectionTest",
+        "com.yunx.app.ui.components.UploadUiStateTest",
+        "com.yunx.app.data.upload.UploadSigningTest",
+        "com.yunx.app.data.upload.UploadIoTest",
+        "com.yunx.app.data.upload.UploadRunnerTest",
+        "com.yunx.app.data.network.QuarkUploadTest",
+        "com.yunx.app.data.network.UploadApiTest",
         "com.yunx.app.data.network.VideoLinkParserTest",
         "com.yunx.app.data.network.ShareLinkParserTest",
         "com.yunx.app.data.network.StarSeaApiTest",

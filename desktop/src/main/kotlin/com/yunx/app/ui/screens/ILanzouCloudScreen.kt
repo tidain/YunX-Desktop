@@ -1,5 +1,11 @@
 package com.yunx.app.ui.screens
 
+import com.yunx.app.ui.components.UploadDialogs
+import com.yunx.app.ui.components.UploadDropHint
+import com.yunx.app.ui.components.UploadIconButton
+import com.yunx.app.ui.components.rememberUploadUi
+import com.yunx.app.ui.components.uploadDropTarget
+
 import com.yunx.app.ui.SnackbarController
 import com.yunx.app.ui.BackHandler
 import com.yunx.app.ui.theme.Motion
@@ -109,10 +115,21 @@ fun ILanzouCloudScreen(
     modifier: Modifier = Modifier
 ) {
     val state by viewModel.uiState.collectAsState()
+    val uploadDirectory = state as? ILanzouCloudUiState.Loaded
+    val uploadEnabled = uploadDirectory != null && !viewModel.multiSelectMode && !viewModel.isOperating
+    val uploadUi = rememberUploadUi(
+        destinationKey = uploadDirectory?.dirId,
+        destination = (listOf("蓝奏优享") + uploadDirectory?.pathNames.orEmpty()).joinToString(" / "),
+        enabled = uploadEnabled,
+        progress = viewModel.uploadProgress,
+        onAppend = viewModel::appendUploadFiles,
+        onUpload = viewModel::uploadFiles
+    )
     BackHandler {
         val s = state
         if (s is ILanzouCloudUiState.Loaded && s.pathNames.isNotEmpty()) viewModel.back() else onExit()
     }
+    UploadDialogs(uploadUi, viewModel.uploadProgress, viewModel::cancelUpload)
     val listState = rememberLazyListState()
     var showActionSheet by remember { mutableStateOf(false) }
     var showRename by remember { mutableStateOf(false) }
@@ -179,7 +196,7 @@ fun ILanzouCloudScreen(
                     }
                 }
 
-                is ILanzouCloudUiState.Loaded -> Box(modifier = Modifier.fillMaxSize()) {
+                is ILanzouCloudUiState.Loaded -> Box(modifier = Modifier.fillMaxSize().uploadDropTarget(uploadUi)) {
                     LazyColumn(
                             state = listState,
                             modifier = Modifier
@@ -231,6 +248,7 @@ fun ILanzouCloudScreen(
                                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                                 )
                                             }
+                                            UploadIconButton(onClick = uploadUi::open, enabled = uploadEnabled)
                                             IconButton(onClick = { showCreateFolder = true }) {
                                                 Icon(
                                                     imageVector = Icons.Outlined.CreateNewFolder,
@@ -249,6 +267,7 @@ fun ILanzouCloudScreen(
                                             pathNames = s.pathNames,
                                             onNavigate = { viewModel.navigateToLevel(it) }
                                         )
+                                        UploadDropHint(uploadUi, uploadEnabled)
                                     }
                                 }
                             }

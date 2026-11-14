@@ -1,5 +1,8 @@
 package com.yunx.app.ui.viewmodel
 
+import com.yunx.app.data.upload.UploadSessions
+import com.yunx.app.ui.SnackbarController
+
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -39,7 +42,10 @@ class MultiAccountViewModel(
         }
 
     fun setPrimary(platform: String, id: String) {
-        viewModelScope.launch { directory.setPrimary(platform, id) }
+        viewModelScope.launch {
+            try { directory.setPrimary(platform, id) }
+            catch (e: IllegalStateException) { SnackbarController.show(e.message.orEmpty()) }
+        }
     }
 
     fun rename(platform: String, id: String, remark: String) {
@@ -55,6 +61,7 @@ class MultiAccountViewModel(
      *   旧实现在点击时同步等 3 秒，正好卡死回调泵，表现为「加第二个账号时登录页打不开」。
      */
     suspend fun prepareAddAccount(platform: String) {
+        UploadSessions.requireIdle(platform)
         CookieCleaner.clearCookiesAndWait(webDomains(platform))
     }
 
@@ -66,7 +73,11 @@ class MultiAccountViewModel(
      */
     fun remove(platform: String, id: String) {
         viewModelScope.launch {
-            directory.remove(platform, id)
+            try { directory.remove(platform, id) }
+            catch (e: IllegalStateException) {
+                SnackbarController.show(e.message.orEmpty())
+                return@launch
+            }
             if (directory.list(platform).isEmpty()) {
                 CookieCleaner.clearCookiesForDomains(webDomains(platform))
             }

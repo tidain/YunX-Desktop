@@ -238,4 +238,8 @@ object C139Constants {
         }
         return null
     }
+    // 原生上传协议
+    const val FILE_UPLOAD_CREATE_URL = "$CLOUD_BASE/hcy/file/create"
+    const val FILE_UPLOAD_URL_URL = "$CLOUD_BASE/hcy/file/getUploadUrl"
+    const val FILE_UPLOAD_COMPLETE_URL = "$CLOUD_BASE/hcy/file/complete"
 }

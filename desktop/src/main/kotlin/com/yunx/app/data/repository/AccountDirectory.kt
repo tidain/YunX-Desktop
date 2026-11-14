@@ -1,5 +1,7 @@
 package com.yunx.app.data.repository
 
+import com.yunx.app.data.upload.UploadSessions
+
 import com.yunx.app.data.db.AppDatabase
 import com.yunx.app.data.db.MultiAccountEntity
 import com.yunx.app.data.download.DownloadPlatform
@@ -50,7 +52,9 @@ class AccountDirectory(private val db: AppDatabase) {
 
     /** 设为主账号（列目录 / 转存 / 上传等需要单一身份的操作改用它） */
     suspend fun setPrimary(platform: String, id: String) {
-        writeOps(platform)?.setPrimary?.invoke(id)
+        UploadSessions.changeAccount(platform) {
+            writeOps(platform)?.setPrimary?.invoke(id)
+        }
     }
 
     /** 改账号备注（空串 = 界面回退显示昵称） */
@@ -66,11 +70,13 @@ class AccountDirectory(private val db: AppDatabase) {
      *   取链时 `getAccount()` 只能靠 `updatedAt` 兜底，行为变得不可预期。
      */
     suspend fun remove(platform: String, id: String) {
-        val ops = writeOps(platform) ?: return
-        ops.delete.invoke(id)
-        val rest = list(platform)
-        if (rest.isNotEmpty() && rest.none { it.isPrimary }) {
-            ops.setPrimary.invoke(rest.first().id)
+        UploadSessions.changeAccount(platform) {
+            val ops = writeOps(platform) ?: return@changeAccount
+            ops.delete.invoke(id)
+            val rest = list(platform)
+            if (rest.isNotEmpty() && rest.none { it.isPrimary }) {
+                ops.setPrimary.invoke(rest.first().id)
+            }
         }
     }
 

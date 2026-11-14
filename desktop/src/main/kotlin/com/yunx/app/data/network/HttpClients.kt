@@ -1,5 +1,7 @@
 package com.yunx.app.data.network
 
+import com.yunx.app.data.upload.UploadRequestInterceptor
+
 import okhttp3.ConnectionPool
 import okhttp3.Dispatcher
 import okhttp3.OkHttpClient
@@ -28,6 +30,9 @@ object HttpClients {
     @Volatile
     private var downloadCache: OkHttpClient? = null
 
+    @Volatile
+    private var uploadCache: OkHttpClient? = null
+
     /** 当前生效的 HTTP 代理主机；null 表示直连 */
     @Volatile
     private var proxyHost: String? = null
@@ -52,6 +57,7 @@ object HttpClients {
             // 使既有客户端失效：下次 apiClient()/downloadClient() 时重建，代理立即生效
             apiCache = null
             downloadCache = null
+            uploadCache = null
         }
     }
 
@@ -66,6 +72,7 @@ object HttpClients {
             // 使既有客户端失效：下次 apiClient()/downloadClient() 时重建，协议立即生效
             apiCache = null
             downloadCache = null
+            uploadCache = null
         }
     }
 
@@ -99,6 +106,23 @@ object HttpClients {
         }
     }
 
+    /** 上传使用独立超时；禁止底层自动重放写请求。 */
+    fun uploadClient(): OkHttpClient {
+        uploadCache?.let { return it }
+        synchronized(lock) {
+            uploadCache?.let { return it }
+            return OkHttpClient.Builder()
+                .connectTimeout(20, TimeUnit.SECONDS)
+                .readTimeout(120, TimeUnit.SECONDS)
+                .writeTimeout(120, TimeUnit.SECONDS)
+                .retryOnConnectionFailure(false)
+                .protocols(currentProtocols())
+                .addInterceptor(UploadRequestInterceptor())
+                .apply { currentProxy()?.let { proxy(it) } }
+                .build().also { uploadCache = it }
+        }
+    }
+
     private fun buildApi(): OkHttpClient {
         return OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
@@ -108,6 +132,7 @@ object HttpClients {
             .retryOnConnectionFailure(true)
             .protocols(currentProtocols())
             // 诊断模式：记方法/脱敏 URL/状态码/耗时，非 200/206 才带 body 摘要（关着时首行短路，零开销）
+            .addInterceptor(UploadRequestInterceptor())
             .addInterceptor(DiagnosticNetworkInterceptor())
             .apply {
                 // 配置了有效代理时注入；否则保持默认直连，行为与改动前完全一致

@@ -1,5 +1,11 @@
 package com.yunx.app.ui.screens
 
+import com.yunx.app.ui.components.UploadDialogs
+import com.yunx.app.ui.components.UploadDropHint
+import com.yunx.app.ui.components.UploadIconButton
+import com.yunx.app.ui.components.rememberUploadUi
+import com.yunx.app.ui.components.uploadDropTarget
+
 import com.yunx.app.ui.SnackbarController
 import com.yunx.app.ui.BackHandler
 import com.yunx.app.ui.theme.Motion
@@ -109,11 +115,22 @@ fun GuangYaCloudScreen(
     modifier: Modifier = Modifier
 ) {
     val state by viewModel.uiState.collectAsState()
+    val uploadDirectory = state as? GuangYaCloudUiState.Loaded
+    val uploadEnabled = uploadDirectory != null && !viewModel.multiSelectMode && !viewModel.isOperating
+    val uploadUi = rememberUploadUi(
+        destinationKey = uploadDirectory?.dirId,
+        destination = (listOf("光鸭云盘") + uploadDirectory?.pathNames.orEmpty()).joinToString(" / "),
+        enabled = uploadEnabled,
+        progress = viewModel.uploadProgress,
+        onAppend = viewModel::appendUploadFiles,
+        onUpload = viewModel::uploadFiles
+    )
     // 系统返回键 → 子目录返回上一级，根目录返回账号列表
     BackHandler {
         val s = state
         if (s is GuangYaCloudUiState.Loaded && s.pathNames.isNotEmpty()) viewModel.back() else onExit()
     }
+    UploadDialogs(uploadUi, viewModel.uploadProgress, viewModel::cancelUpload)
     val listState = rememberLazyListState()
     val pickDownloadDir = rememberDownloadDirPicker()
     var showActionSheet by remember { mutableStateOf(false) }
@@ -185,7 +202,7 @@ fun GuangYaCloudScreen(
                     }
                 }
 
-                is GuangYaCloudUiState.Loaded -> Box(modifier = Modifier.fillMaxSize()) {
+                is GuangYaCloudUiState.Loaded -> Box(modifier = Modifier.fillMaxSize().uploadDropTarget(uploadUi)) {
                     LazyColumn(
                             state = listState,
                             modifier = Modifier
@@ -238,6 +255,7 @@ fun GuangYaCloudScreen(
                                                 )
                                             }
                                             // 新建文件夹入口（窗口内覆盖层输入）
+                                            UploadIconButton(onClick = uploadUi::open, enabled = uploadEnabled)
                                             IconButton(onClick = { showCreateFolder = true }) {
                                                 Icon(
                                                     imageVector = Icons.Outlined.CreateNewFolder,
@@ -256,6 +274,7 @@ fun GuangYaCloudScreen(
                                             pathNames = s.pathNames,
                                             onNavigate = { viewModel.navigateToLevel(it) }
                                         )
+                                        UploadDropHint(uploadUi, uploadEnabled)
                                     }
                                 }
                             }

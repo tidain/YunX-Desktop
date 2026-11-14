@@ -2,6 +2,8 @@ package com.yunx.app.data.prefs
 
 import com.yunx.app.AppContext
 import com.yunx.app.data.download.DownloadPlatform
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.util.prefs.Preferences
 
 /**
@@ -60,6 +62,15 @@ class SettingsRepository {
         get() = prefs.getInt("max_concurrent_downloads", DEFAULT_MAX_CONCURRENT_DOWNLOADS)
         set(value) {
             prefs.putInt("max_concurrent_downloads", value.coerceIn(1, 10))
+        }
+
+    /** 每个平台同时处理的上传文件数，持久保存并通知运行中的队列。 */
+    var maxConcurrentUploads: Int
+        get() = uploadConcurrency.value
+        set(value) {
+            val limit = value.coerceIn(1, MAX_CONCURRENT_UPLOADS)
+            prefs.putInt("max_concurrent_uploads", limit)
+            uploadConcurrencyState.value = limit
         }
 
     /** 下载速度限制（字节/秒；0 = 不限速） */
@@ -644,6 +655,17 @@ class SettingsRepository {
         const val MAX_DOWNLOAD_THREADS = 512
         const val XUNLEI_DOWNLOAD_THREADS = 8
         const val DEFAULT_MAX_CONCURRENT_DOWNLOADS = 3
+        const val DEFAULT_MAX_CONCURRENT_UPLOADS = 3
+        const val MAX_CONCURRENT_UPLOADS = 10
+
+        private val uploadConcurrencyState by lazy {
+            MutableStateFlow(
+                AppContext.settingsPrefs.getInt("max_concurrent_uploads", DEFAULT_MAX_CONCURRENT_UPLOADS)
+                    .coerceIn(1, MAX_CONCURRENT_UPLOADS)
+            )
+        }
+        val uploadConcurrency by lazy { uploadConcurrencyState.asStateFlow() }
+
         const val DEFAULT_DOWNLOAD_RETRY_COUNT = 3
         const val DEFAULT_PROXY_PORT = 7890
 

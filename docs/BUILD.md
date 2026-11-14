@@ -66,7 +66,7 @@ Beta=0           ← 第二行：Beta=1 预览版 / Beta=0 正式版（缺省 = 
 | 便携版 | `release\YunX-Desktop\` | 整个文件夹拷走即用，双击 `YunX-Desktop.exe` 运行，无需安装 |
 | 安装程序 | `release\YunX-Desktop-setup-<版本>.exe` | 每用户安装到 `%LOCALAPPDATA%\Programs\YunX-Desktop`，无需管理员权限；创建开始菜单 / 桌面快捷方式「云析」，可卸载 |
 
-打包脚本会自动结束正在运行的程序实例，并在输出目录被占用时重试删除。
+打包脚本不会结束运行中的程序，避免中断上传或下载；输出目录被占用时会重试删除，仍失败时请先完成任务并手动退出程序再打包。
 
 便携包约 230MB（其中运行期 JRE 约 40MB、CEF 原生库压缩包约 110MB），体积主要来自 Chromium。
 

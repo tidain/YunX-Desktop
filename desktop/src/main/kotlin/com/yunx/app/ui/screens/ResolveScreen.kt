@@ -72,6 +72,7 @@ import com.mikepenz.markdown.m3.Markdown
 import com.yunx.app.data.db.BookmarkEntity
 import com.yunx.app.data.network.GitHubLinkParser
 import com.yunx.app.data.network.GitHubMirror
+import com.yunx.app.data.network.LinkInputRouter
 import com.yunx.app.data.network.ShareLinkParser
 import com.yunx.app.data.network.video.VideoLinkParser
 import com.yunx.app.data.network.SharePlatform
@@ -127,6 +128,8 @@ fun ResolveScreen(
     onManageShortcuts: () -> Unit = {},
     /** 识别到视频平台链接时交给宿主的视频解析页（网盘解析器不认识这些域名） */
     onVideoLink: (String) -> Unit = {},
+    /** 识别到磁力 / ed2k / 本地种子文件时交给宿主：切到下载页并预填「添加下载任务」 */
+    onP2PLink: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val state = viewModel.uiState
@@ -141,9 +144,13 @@ fun ResolveScreen(
     // 链接历史弹窗可见性（输入页 / 详情页都可触发，故挂载在父层）
     var showHistory by remember { mutableStateOf(false) }
 
-    // 视频链接优先分流：抖音/快手/B站等域名交给视频解析页，其余仍走网盘/GitHub 解析
+    // 输入分流：磁力 / ed2k / 种子文件交给下载页；视频链接交给视频解析页；其余走网盘/GitHub 解析
     val resolveLink: (String, String?) -> Unit = { text, code ->
-        if (VideoLinkParser.looksLikeVideoLink(text)) onVideoLink(text) else viewModel.startResolve(text, code)
+        when (LinkInputRouter.targetOf(text)) {
+            LinkInputRouter.Target.P2P -> onP2PLink(text)
+            LinkInputRouter.Target.VIDEO -> onVideoLink(text)
+            LinkInputRouter.Target.RESOLVE -> viewModel.startResolve(text, code)
+        }
     }
 
     // 剪贴板分享链接提示状态：待提示的剪贴板文本 + 已忽略的文本
@@ -160,7 +167,8 @@ fun ResolveScreen(
             text != link &&
             text != ignoredClipboard &&
             (ShareLinkParser.parse(text) != null || GitHubLinkParser.parse(text) != null ||
-                VideoLinkParser.looksLikeVideoLink(text))
+                VideoLinkParser.looksLikeVideoLink(text) ||
+                LinkInputRouter.targetOf(text) == LinkInputRouter.Target.P2P)
         ) {
             clipboardSuggestion = text
         }
@@ -387,10 +395,12 @@ fun ResolveScreen(
                 val parsed = ShareLinkParser.parse(suggestion)
                 val githubParsed = GitHubLinkParser.parse(suggestion)
                 val videoParsed = VideoLinkParser.parse(suggestion)
+                val p2pLink = LinkInputRouter.targetOf(suggestion) == LinkInputRouter.Target.P2P
                 ClipboardSuggestCard(
                     // 标题按识别结果给（视频链接此前一律显示成「网盘」，用户会误解）
                     title = when {
                         githubParsed != null -> "检测到 GitHub 分享链接"
+                        p2pLink -> "检测到磁力 / ed2k 下载链接"
                         parsed != null -> "检测到 ${platformLabel(parsed.platform)}分享链接"
                         videoParsed != null -> "检测到 ${videoParsed.platform.displayName} 视频链接"
                         else -> "检测到分享链接"
@@ -403,6 +413,8 @@ fun ResolveScreen(
                                 link = suggestion
                                 viewModel.startGitHubResolve(githubParsed)
                             }
+                            // 磁力 / ed2k / 种子文件进下载页的添加任务弹窗，不发给网盘解析
+                            p2pLink -> onP2PLink(suggestion)
                             // 视频链接直接进视频解析页，不污染网盘输入框
                             videoParsed != null -> onVideoLink(suggestion)
                             else -> {

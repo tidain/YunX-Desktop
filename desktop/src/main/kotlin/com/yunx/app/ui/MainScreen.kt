@@ -217,6 +217,8 @@ fun MainScreen(
     onMinimizeToTray: () -> Unit = {}
 ) {
     var currentTab by rememberSaveable { mutableStateOf(MainTab.Resolve) }
+    // 主页输入框识别到磁力 / ed2k / 种子文件时，切到下载页并把这个地址预填进「添加下载任务」
+    var p2pAddPrefill by remember { mutableStateOf<String?>(null) }
     // 网盘页：四宫格 / 列表布局切换
     var driveGridMode by rememberSaveable { mutableStateOf(false) }
     var showQuarkLogin by rememberSaveable { mutableStateOf(false) }
@@ -997,6 +999,10 @@ fun MainScreen(
                             onVideoLink = { text ->
                                 videoResolveViewModel.resolve(text)
                                 videoResolveText = text
+                            },
+                            onP2PLink = { text ->
+                                p2pAddPrefill = text
+                                currentTab = MainTab.Download
                             }
                         )
                         MainTab.Drive -> DriveScreen(
@@ -1070,7 +1076,12 @@ fun MainScreen(
                             // 更多菜单「清除 Token」：先二次确认再清除
                             onGitHubClearToken = { showGitHubClearConfirm = true }
                         )
-                        MainTab.Download -> DownloadScreen(scrollBehavior, downloadViewModel)
+                        MainTab.Download -> DownloadScreen(
+                            scrollBehavior,
+                            downloadViewModel,
+                            pendingAddUrl = p2pAddPrefill,
+                            onPendingAddConsumed = { p2pAddPrefill = null }
+                        )
                         MainTab.Settings -> SettingsScreen(
                             scrollBehavior = scrollBehavior,
                             onThemeClick = { showTheme = true },

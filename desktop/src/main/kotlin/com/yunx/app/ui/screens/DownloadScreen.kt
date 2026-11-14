@@ -68,6 +68,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarScrollBehavior
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -118,6 +119,10 @@ import kotlinx.coroutines.withContext
 fun DownloadScreen(
     scrollBehavior: TopAppBarScrollBehavior,
     viewModel: DownloadViewModel,
+    /** 主页输入框识别到 P2P 链接后带过来的地址：直接打开「添加下载任务」并预填 */
+    pendingAddUrl: String? = null,
+    /** 预填地址被消费（弹窗关闭）后回调，宿主据此清空状态 */
+    onPendingAddConsumed: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val tasks by viewModel.tasks.collectAsState()
@@ -128,6 +133,10 @@ fun DownloadScreen(
     val listState = rememberLazyListState()
     val settingsRepo = remember { SettingsRepository() }
     var showAddDialog by remember { mutableStateOf(false) }
+    // 从主页 / 剪贴板带过来的 P2P（磁力 / ed2k / 种子文件）链接：自动打开添加弹窗并预填地址
+    LaunchedEffect(pendingAddUrl) {
+        if (!pendingAddUrl.isNullOrBlank()) showAddDialog = true
+    }
     var pendingDelete by remember { mutableStateOf<DownloadTaskEntity?>(null) }
     var showDeleteAllConfirm by remember { mutableStateOf(false) }
     // 文件夹组折叠状态：只记录用户收起的组，默认全部展开；切 Tab 重建后仍保留
@@ -294,11 +303,16 @@ fun DownloadScreen(
 
     if (showAddDialog) {
         AddDownloadDialog(
-            onDismiss = { showAddDialog = false },
+            onDismiss = {
+                showAddDialog = false
+                onPendingAddConsumed()
+            },
             onConfirm = { url, name, saveDir ->
                 showAddDialog = false
+                onPendingAddConsumed()
                 viewModel.enqueue(url, name, saveDir = saveDir)
-            }
+            },
+            initialUrl = pendingAddUrl.orEmpty()
         )
     }
 
@@ -1235,10 +1249,21 @@ private fun formatRemain(millis: Long): String {
 @Composable
 private fun AddDownloadDialog(
     onDismiss: () -> Unit,
-    onConfirm: (url: String, name: String, saveDir: String) -> Unit
+    onConfirm: (url: String, name: String, saveDir: String) -> Unit,
+    /** 由主页 / 剪贴板分流带过来的地址（磁力 / ed2k / 种子文件） */
+    initialUrl: String = ""
 ) {
-    var url by remember { mutableStateOf("") }
-    var name by remember { mutableStateOf("") }
+    var url by remember { mutableStateOf(initialUrl) }
+    // 预填 P2P 链接时同步补一个显示名，避免用户还要手填（与手动粘贴时的占位规则一致）
+    var name by remember {
+        mutableStateOf(
+            if (P2PLink.matches(initialUrl)) {
+                P2PLink.displayName(initialUrl)
+            } else {
+                initialUrl.substringAfterLast('/').take(80)
+            }
+        )
+    }
     // 用户是否手动改过「名称」：没改过就随 url 实时重算显示名，改过就不再覆盖
     var nameEdited by remember { mutableStateOf(false) }
     var saveDir by remember { mutableStateOf("") }

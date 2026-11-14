@@ -153,6 +153,7 @@ tasks.register<JavaExec>("testInProcess") {
     classpath = testInProcessClasspath
     args = listOf(
         "com.yunx.app.data.network.VideoLinkParserTest",
+        "com.yunx.app.data.network.BilibiliParserTest",
         "com.yunx.app.data.network.ShareLinkParserTest",
         "com.yunx.app.data.network.StarSeaApiTest",
         "com.yunx.app.data.download.HlsRequestPolicyTest",

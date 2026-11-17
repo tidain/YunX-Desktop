@@ -306,8 +306,12 @@ object DashMuxer {
                             if ((flags and 0x01) != 0) { baseDataOffset = moof.i64(i); i += 8 }
                             if ((flags and 0x02) != 0) i += 4
                             if ((flags and 0x08) != 0) { defaultDuration = moof.u32(i); i += 4 }
-                            if ((flags and 0x10) != 0) { defaultFlags = moof.i32(i); i += 4 }
-                            if ((flags and 0x20) != 0) { defaultSize = moof.u32(i); i += 4 }
+                            // ★ ISO 14496-12 §8.8.7 字段顺序：duration → size(0x10) → flags(0x20)。
+                            //   原实现两位写反且顺序颠倒：只带 default-sample-flags(0x20) 的 moof 会把
+                            //   flags 值（关键帧标志 0x02000000）当成每样本 size → 样本偏移累计飞出
+                            //   文件尾（表现为「合轨异常：样本读取越界」）。
+                            if ((flags and 0x10) != 0) { defaultSize = moof.u32(i); i += 4 }
+                            if ((flags and 0x20) != 0) { defaultFlags = moof.i32(i); i += 4 }
                         }
                         "tfdt" -> Unit // 片段的 decode time 已在各样本时长里连续累计，无需另记
                     }

@@ -63,7 +63,7 @@ object GopeedEngine {
 
     private const val TAG = "GopeedEngine"
     private const val DIR_NAME = "gopeed"
-    private const val EXE_NAME = "gopeed.exe"
+    private val EXE_NAME = if (com.yunx.app.util.WindowsTitleBar.isWindows) "gopeed.exe" else "gopeed"
     private const val BIN_DIR_NAME = "bin"
 
     /** 引擎 HTTP 协议的默认 UA（与 gopeed 自带默认一致）：任务未自带 UA 时使用，避免空 UA 被 CDN 限速 */
@@ -173,10 +173,13 @@ object GopeedEngine {
                 }
             }
             if (!found) {
-                throw IllegalStateException("压缩包里没有找到 $EXE_NAME（请使用 Gopeed 官方 windows-amd64 包）")
+                throw IllegalStateException("压缩包里没有找到 $EXE_NAME（请使用 Gopeed 官方对应系统与架构的包）")
             }
         } else {
             archive.copyTo(target, overwrite = true)
+        }
+        if (!com.yunx.app.util.WindowsTitleBar.isWindows) {
+            check(target.setExecutable(true)) { "无法设置内核执行权限" }
         }
         lastError = null
         _state.value = State.INSTALLED

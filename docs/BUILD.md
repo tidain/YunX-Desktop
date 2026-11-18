@@ -6,6 +6,8 @@
 
 要求：Windows 10/11 x64。
 
+macOS Apple Silicon 的实验性构建入口、产物及平台限制见 **[macOS 构建说明](BUILD-MACOS.md)**。
+
 | 依赖 | 说明 |
 | --- | --- |
 | JDK 17 | 缺失时 `jdk-setup.ps1` 自动下载便携版 |

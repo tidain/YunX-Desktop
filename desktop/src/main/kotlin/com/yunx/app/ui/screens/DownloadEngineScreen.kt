@@ -391,7 +391,7 @@ fun DownloadEngineScreen(
                             kernelVersion?.let { append(" · 核心版本 $it") }
                         }
                     } else {
-                        "未导入（需要官方 windows 版内核）"
+                        "未导入（需要本机平台对应的官方内核）"
                     }
                 )
                 Spacer(Modifier.height(6.dp))
@@ -417,7 +417,7 @@ fun DownloadEngineScreen(
                     ) {
                         Icon(Icons.Outlined.UploadFile, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text("导入本地内核（.zip / .exe）")
+                        Text("导入本地内核（压缩包 / 可执行文件）")
                     }
                 } else {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -787,7 +787,7 @@ fun DownloadEngineScreen(
                     ) {
                         Icon(Icons.Outlined.UploadFile, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(8.dp))
-                        Text("导入本地内核（.zip / .exe）")
+                        Text("导入本地内核（压缩包 / 可执行文件）")
                     }
                 }
             },

@@ -53,6 +53,7 @@ class DbKeyStoreTest {
         assertFalse(DbEncryptionLevel.STRICTEST.isSupported)
         assertTrue(DbEncryptionLevel.NORMAL.isMachineBound)
         assertTrue(DbEncryptionLevel.STRICT.isMachineBound)
+        assertEquals(System.getProperty("os.name").lowercase().contains("win"), DbEncryptionLevel.STRICT.isSupported)
         assertFalse("宽松档必须能跨机器使用，不能被判为绑定本机", DbEncryptionLevel.LOOSE.isMachineBound)
     }
 }

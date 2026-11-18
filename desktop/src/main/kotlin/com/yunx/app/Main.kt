@@ -242,6 +242,10 @@ fun main(args: Array<String>) {
         ) {
             androidx.compose.runtime.SideEffect {
                 mainWindow = window as? java.awt.Frame
+                JcefHolder.onQuitRequested = {
+                    saveWindowPosition(mainWindow)
+                    exitApplication()
+                }
                 // 接管窗口异常：默认实现会弹原生「Error」对话框（退出期的良性竞态也会弹）
                 runCatching { window.exceptionHandler = windowErrorHandler }
                 com.yunx.app.ui.components.PreviewFullscreen.windowState = windowState
@@ -280,6 +284,10 @@ fun main(args: Array<String>) {
                     TrayManager.install(
                         image = icon,
                         onLeftClick = { DesktopActions.bringWindowToFront(mainWindow) },
+                        onExit = {
+                            saveWindowPosition(mainWindow)
+                            exitApplication()
+                        },
                         onRightClick = { x, y ->
                             val cmd = Win32PopupMenu.show(
                                 items = listOf(

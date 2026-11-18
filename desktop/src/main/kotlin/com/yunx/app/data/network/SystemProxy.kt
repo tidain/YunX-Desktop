@@ -5,7 +5,7 @@ import com.sun.jna.platform.win32.WinReg
 import com.yunx.app.util.Log
 
 /**
- * Windows 系统代理解析：读取系统「Internet 选项」里配置的代理。
+ * 系统代理解析：Windows 读取「Internet 选项」注册表，macOS 读取 scutil --proxy。
  *
  * 注册表位置：HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Internet Settings
  * - ProxyEnable(DWORD)：1=启用，0=未启用（缺失视为未启用）
@@ -14,7 +14,7 @@ import com.yunx.app.util.Log
  * - AutoConfigURL(字符串)：PAC 自动配置脚本地址，本实现不支持
  *
  * 说明：
- * - 非 Windows 平台一律视为不可用，调用方按直连处理。
+ * - 其它平台视为不可用，调用方按直连处理。
  * - 绕过列表（ProxyOverride）与 PAC 均不生效；PAC 会明确写日志，不静默降级。
  * - 本解析只在应用启动 / 用户修改代理设置时执行一次；运行中系统代理发生变化不会自动跟随。
  */
@@ -38,7 +38,7 @@ object SystemProxy {
         /** 检测到 PAC 自动配置脚本，本实现不支持 → 直连 */
         data object PacUnsupported : Inspect
 
-        /** 非 Windows 平台或读取注册表失败 → 直连 */
+        /** 当前平台不支持或读取系统配置失败 → 直连 */
         data object Unavailable : Inspect
     }
 
@@ -47,9 +47,10 @@ object SystemProxy {
 
     /**
      * 读取本机系统代理并解析。返回 [Inspect.Proxy] 表示可用，其余一律按直连处理。
-     * 调用方据此装配全局代理；本函数只读一次注册表。
+     * 调用方据此装配全局代理；本函数只读一次系统配置。
      */
     fun inspect(): Inspect {
+        if (System.getProperty("os.name").lowercase().contains("mac")) return inspectMac()
         if (!isWindows) {
             Log.i(TAG, "非 Windows 平台，不支持系统代理，按直连处理")
             return Inspect.Unavailable
@@ -59,6 +60,35 @@ object SystemProxy {
         val pac = readString("AutoConfigURL")
         val override = readString("ProxyOverride")
         return parse(enable, server, pac, override)
+    }
+
+    private fun inspectMac(): Inspect = runCatching {
+        val process = ProcessBuilder("/usr/sbin/scutil", "--proxy").start()
+        val output = process.inputStream.bufferedReader().use { it.readText() }
+        check(process.waitFor() == 0) { "scutil --proxy failed" }
+        parseMac(output)
+    }.getOrElse {
+        Log.w(TAG, "读取 macOS 系统代理失败：${it.message}")
+        Inspect.Unavailable
+    }
+
+    /** scutil 的文本输出解析；不执行外部进程，便于在任意平台测试。 */
+    internal fun parseMac(output: String): Inspect {
+        val values = output.lineSequence().mapNotNull { line ->
+            val parts = line.trim().split(" : ", limit = 2)
+            if (parts.size == 2) parts[0] to parts[1].trim() else null
+        }.toMap()
+        if (values["ProxyAutoConfigEnable"] == "1" || values["ProxyAutoDiscoveryEnable"] == "1") {
+            return Inspect.PacUnsupported
+        }
+        for (kind in listOf("HTTPS", "HTTP")) {
+            if (values["${kind}Enable"] == "1") {
+                val host = values["${kind}Proxy"]?.takeIf { it.isNotBlank() } ?: continue
+                val port = values["${kind}Port"]?.toIntOrNull()?.takeIf { it in 1..65535 } ?: continue
+                return Inspect.Proxy(host, port)
+            }
+        }
+        return Inspect.Direct
     }
 
     /**

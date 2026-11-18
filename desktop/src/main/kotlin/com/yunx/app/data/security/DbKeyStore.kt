@@ -35,7 +35,8 @@ enum class DbEncryptionLevel(val id: String, val label: String) {
     STRICTEST("strictest", "严格");
 
     /** 该档位在当前系统上是否可用（严格档需要 SQLCipher 原生库，暂未支持） */
-    val isSupported: Boolean get() = this != STRICTEST
+    val isSupported: Boolean get() = this != STRICTEST &&
+        (this != STRICT || System.getProperty("os.name").lowercase().contains("win"))
 
     /** 密钥是否绑定本机（换机器后凭证将无法解密，需重新登录） */
     val isMachineBound: Boolean get() = this == NORMAL || this == STRICT
@@ -219,6 +220,12 @@ object DbKeyStore {
 
     /** Windows MachineGuid（HKLM\SOFTWARE\Microsoft\Cryptography），普通用户可读 */
     private fun machineGuid(): String? = runCatching {
+        if (System.getProperty("os.name").lowercase().contains("mac")) {
+            val process = ProcessBuilder("/usr/sbin/ioreg", "-rd1", "-c", "IOPlatformExpertDevice").start()
+            val output = process.inputStream.bufferedReader().use { it.readText() }
+            check(process.waitFor() == 0) { "ioreg failed" }
+            return@runCatching Regex("\"IOPlatformUUID\"\\s*=\\s*\"([^\"]+)\"").find(output)?.groupValues?.get(1)
+        }
         Advapi32Util.registryGetStringValue(
             WinReg.HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Cryptography", "MachineGuid"
         ).takeIf { it.isNotBlank() }

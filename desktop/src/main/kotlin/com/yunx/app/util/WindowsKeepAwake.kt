@@ -25,11 +25,16 @@ object WindowsKeepAwake {
     /** 所有 SetThreadExecutionState 调用固定在此线程（状态线程本地，跨线程会失调） */
     private val executor = Executors.newSingleThreadExecutor { r -> Thread(r, "yunx-keep-awake") }
     private val refs = AtomicInteger(0)
+    private var caffeinate: Process? = null
+    private val isMac = System.getProperty("os.name").lowercase().contains("mac")
 
     fun acquire() {
         if (refs.getAndIncrement() == 0) {
             executor.execute {
-                runCatching { Kernel32.INSTANCE.SetThreadExecutionState(ES_CONTINUOUS or ES_SYSTEM_REQUIRED) }
+                runCatching {
+                    if (isMac) caffeinate = ProcessBuilder("/usr/bin/caffeinate", "-i", "-w", ProcessHandle.current().pid().toString()).start()
+                    else Kernel32.INSTANCE.SetThreadExecutionState(ES_CONTINUOUS or ES_SYSTEM_REQUIRED)
+                }
             }
         }
     }
@@ -38,7 +43,10 @@ object WindowsKeepAwake {
         if (refs.decrementAndGet() <= 0) {
             refs.set(0)
             executor.execute {
-                runCatching { Kernel32.INSTANCE.SetThreadExecutionState(ES_CONTINUOUS) }
+                runCatching {
+                    if (isMac) { caffeinate?.destroy(); caffeinate = null }
+                    else Kernel32.INSTANCE.SetThreadExecutionState(ES_CONTINUOUS)
+                }
             }
         }
     }

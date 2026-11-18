@@ -38,7 +38,7 @@ import com.yunx.app.ui.theme.compactMarkdownTypography
 /**
  * 发现新版本弹窗：标题 + 当前/最新版本 + 更新说明（Markdown 渲染、可滚动限高）+ 下载更新 / 稍后 / 不再提示该版本。
  *
- * 桌面版同时提供「安装版(.exe)」和「便携版(.zip)」两个下载入口，
+ * Windows 提供「安装版(.exe)」和「便携版(.zip)」，macOS 提供 DMG 下载入口，
  * 由用户按需选择；若某个类型在 Release 中不存在，则不显示对应按钮。
  *
  * 弹窗走窗口内覆盖层（[FadeAlertDialog]），不创建原生窗口。
@@ -59,8 +59,10 @@ fun UpdateDialog(
      */
     mandatory: Boolean = false
 ) {
-    val exeAsset = release.assets.firstOrNull { it.name.endsWith(".exe", true) }
-    val zipAsset = release.assets.firstOrNull { it.name.endsWith(".zip", true) }
+    val isMac = System.getProperty("os.name").lowercase().contains("mac")
+    val installerExtension = if (isMac) ".dmg" else ".exe"
+    val exeAsset = release.assets.firstOrNull { it.name.endsWith(installerExtension, true) }
+    val zipAsset = if (isMac) null else release.assets.firstOrNull { it.name.endsWith(".zip", true) }
     // 说明里的图片复用 README 的自研加载器（无 Coil，走 GitHubMirror 统一镜像加速）
     GitHubMarkdownImageTransformer.mirrorPrefix = GitHubMirror.activePrefix()
     // 紧凑字号：与 README 共用同一份排版（见 ui/theme/Type.kt）
@@ -188,7 +190,7 @@ fun UpdateDialog(
                                 modifier = Modifier.size(16.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("下载安装版 (.exe)")
+                            Text("下载安装版 ($installerExtension)")
                         }
                     }
                     if (onDownloadMirrorAsset != null) {

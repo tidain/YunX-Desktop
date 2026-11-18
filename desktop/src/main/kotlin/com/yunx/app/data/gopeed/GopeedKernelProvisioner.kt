@@ -80,13 +80,19 @@ object GopeedKernelProvisioner {
         val digest: String
     )
 
-    /** 本机对应的官方包架构后缀：x86_64 → amd64，aarch64 → arm64 */
-    private fun archSuffix(): String {
-        val arch = System.getProperty("os.arch").orEmpty().lowercase()
-        return when {
+    /** 官方内核包按操作系统和架构区分；保留 Windows 的命名约定。 */
+    internal fun assetNameFor(
+        tag: String,
+        osName: String = System.getProperty("os.name"),
+        architecture: String = System.getProperty("os.arch")
+    ): String {
+        val arch = architecture.lowercase()
+        val suffix = when {
             arch.contains("aarch64") || arch.contains("arm64") -> "arm64"
             else -> "amd64"
         }
+        val platform = if (osName.lowercase().contains("mac")) "macos" else "windows"
+        return "$ASSET_PREFIX$tag-$platform-$suffix$ASSET_ARCH_SUFFIX"
     }
 
     /**
@@ -98,12 +104,12 @@ object GopeedKernelProvisioner {
         val json = fetchLatestJson()
         val tag = json.optString("tag_name")
         if (tag.isBlank()) throw IllegalStateException("官方 Release 缺少版本号")
-        val wanted = "$ASSET_PREFIX$tag-windows-${archSuffix()}$ASSET_ARCH_SUFFIX"
+        val wanted = assetNameFor(tag)
         val asset = json.optJSONArray("assets")?.let { arr ->
             (0 until arr.length())
                 .mapNotNull { arr.optJSONObject(it) }
                 .firstOrNull { it.optString("name").equals(wanted, ignoreCase = true) }
-        } ?: throw IllegalStateException("官方 Release（$tag）里没有 Windows 内核包 $wanted")
+        } ?: throw IllegalStateException("官方 Release（$tag）里没有本机平台的内核包 $wanted")
         val direct = asset.optString("browser_download_url")
         if (direct.isBlank()) throw IllegalStateException("内核包缺少下载地址")
         Plan(

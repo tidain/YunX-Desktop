@@ -36,6 +36,10 @@ object JcefHolder {
     @Volatile
     private var cefApp: CefApp? = null
 
+    /** macOS Cmd+Q must exit the Compose application, not only its Chromium engine. */
+    @Volatile
+    var onQuitRequested: (() -> Unit)? = null
+
     /** 最近一次初始化失败的原因（成功或未开始时为 null），登录页可用于提示 */
     @Volatile
     var initFailure: Throwable? = null
@@ -65,6 +69,15 @@ object JcefHolder {
                     killStaleJcefHelpers()
                     recoverFromAbnormalExit()
                     val builder = CefAppBuilder()
+                    if (System.getProperty("os.name").lowercase().contains("mac")) {
+                        builder.setAppHandler(object : me.friwi.jcefmaven.MavenCefAppHandlerAdapter() {
+                            override fun onBeforeTerminate(): Boolean {
+                                val quit = onQuitRequested ?: return false
+                                java.awt.EventQueue.invokeLater { quit() }
+                                return true
+                            }
+                        })
+                    }
                     val installDir = File(AppContext.cacheDir, "jcef-bundle")
                     builder.setInstallDir(installDir)
                     // 发布包带的是 app\jcef-natives.tar.gz（不含原生 jar）：

@@ -62,6 +62,9 @@ object DesktopActions {
     fun revealFile(path: String): Boolean {
         val file = File(path)
         if (!file.exists()) return false
+        if (System.getProperty("os.name").lowercase().contains("mac")) {
+            return runCatching { ProcessBuilder("/usr/bin/open", "-R", file.absolutePath).start(); true }.getOrDefault(false)
+        }
         if (WindowsTitleBar.isWindows) {
             // 返回 HINSTANCE：> 32 表示成功（<= 32 是错误码），失败再退回命令行方式
             val ret = runCatching {
@@ -83,7 +86,8 @@ object DesktopActions {
         val dir = File(path)
         if (!dir.isDirectory && !dir.mkdirs()) return false
         return runCatching {
-            ProcessBuilder("explorer.exe", dir.absolutePath).start()
+            if (WindowsTitleBar.isWindows) ProcessBuilder("explorer.exe", dir.absolutePath).start()
+            else java.awt.Desktop.getDesktop().open(dir)
             true
         }.getOrDefault(false)
     }
@@ -119,6 +123,12 @@ object DesktopActions {
      */
     fun restartApp(): Boolean {
         val exe = launcherExe() ?: return false
+        if (System.getProperty("os.name").lowercase().contains("mac")) {
+            return runCatching {
+                ProcessBuilder("/bin/sh", "-c", "sleep 2; exec \"\$1\"", "yunx-restart", exe.absolutePath).start()
+                true
+            }.getOrDefault(false)
+        }
         return runCatching {
             // 用 cmd 延迟启动：本进程马上就会退出，必须等它把文件句柄都放掉。
             // 延迟用 ping 而不是 timeout —— timeout 在 stdin 被重定向时会直接报错退出（ProcessBuilder 默认就是管道）

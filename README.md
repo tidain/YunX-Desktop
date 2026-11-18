@@ -161,6 +161,17 @@ cd YunX-Desktop
 
 环境要求、版本号管理与打包产物见 **[构建与打包](docs/BUILD.md)**。
 
+### macOS Apple Silicon（实验性）
+
+Apple Silicon Mac 可从源码构建原生 arm64 App 和 DMG（自带 Java 运行时，无需 Rosetta）：
+
+```bash
+./build-macos.sh
+```
+
+构建会运行测试并输出到 `release/`。macOS 安装、视频引擎配置与已知限制见
+**[macOS 构建说明](docs/BUILD-MACOS.md)**；现有 Windows 构建方式保持不变。
+
 ## 常见问题
 
 <details>

@@ -32,6 +32,7 @@ object TrayManager {
     fun install(
         image: BufferedImage,
         onLeftClick: () -> Unit,
+        onExit: () -> Unit,
         onRightClick: (Int, Int) -> Unit
     ) {
         if (!SystemTray.isSupported()) return
@@ -40,13 +41,19 @@ object TrayManager {
         val icon = TrayIcon(image.getScaledInstance(16, 16, Image.SCALE_SMOOTH), "云析 YunX-Desktop").apply {
             isImageAutoSize = true
             // 空 PopupMenu：Windows 必须设才能收到右键事件
-            popupMenu = PopupMenu()
+            popupMenu = PopupMenu().apply {
+                if (!WindowsTitleBar.isWindows) {
+                    add(java.awt.MenuItem("显示主窗口").apply { addActionListener { onLeftClick() } })
+                    addSeparator()
+                    add(java.awt.MenuItem("退出").apply { addActionListener { onExit() } })
+                }
+            }
             addMouseListener(object : MouseAdapter() {
                 override fun mouseClicked(e: MouseEvent) {
                     if (e.button == MouseEvent.BUTTON1) onLeftClick()
                 }
                 override fun mousePressed(e: MouseEvent) {
-                    if (e.button == MouseEvent.BUTTON3) {
+                    if (e.button == MouseEvent.BUTTON3 && WindowsTitleBar.isWindows) {
                         e.consume()
                         onRightClick(e.xOnScreen, e.yOnScreen)
                     }

@@ -36,6 +36,11 @@ object UpdateChecker {
         val downloadUrl: String
     )
 
+    /** macOS 仅展示 DMG，避免下载 Windows 安装器或被仅有 Windows 包的强制更新锁住。 */
+    internal fun assetsForPlatform(assets: List<Asset>, osName: String = System.getProperty("os.name")): List<Asset> =
+        if (osName.lowercase().contains("mac")) assets.filter { it.name.endsWith(".dmg", true) }
+        else assets
+
     data class Release(
         val tagName: String,
         val body: String,
@@ -195,13 +200,16 @@ object UpdateChecker {
                 ?: return@runCatching null
             val tag = json.optString("tag_name")
             if (tag.isBlank()) return@runCatching null
-            val assets = buildList {
+            val assets = assetsForPlatform(buildList {
                 json.optJSONArray("assets")?.let { arr ->
                     for (i in 0 until arr.length()) {
                         val a = arr.optJSONObject(i) ?: continue
                         add(Asset(a.optString("name"), a.optString("browser_download_url")))
                     }
                 }
+            })
+            if (System.getProperty("os.name").lowercase().contains("mac") && assets.isEmpty()) {
+                return@runCatching null
             }
             val rawBody = json.optString("body")
             // 强制更新字段从**原始正文**解析（清洗只去头图/徽章，这里用原文更稳）

@@ -309,6 +309,22 @@ private class BrowserHolder(val client: CefClient, val browser: CefBrowser)
  * - requiredKeys 用于严格平台（如夸克：必须有 buser-u。
  * - anyOfKeys 用于双形态平台（如 139：客户端下发 Os_SSo_Sid，网页版仅下发 authorization）。
  */
+/**
+ * 按 Cookie 名去重：同名只保留最后一次出现的值，保持各名称首次出现的顺序。
+ *
+ * CEF 全局 Cookie 管理器里，同一个 [name]（如 STOKEN）会在多个域
+ * （passport.baidu.com、.baidu.com、pan.baidu.com）或多次登录轮次下各存一份，
+ * 值互不相同。把它们全部拼进同一个 Cookie 头会让百度服务端判定鉴权失败
+ * （api/list 等返回 errno=-6，见 issue #94 的实测对照）。
+ */
+internal fun mergeCookiesByName(pairs: List<Pair<String, String>>): List<Pair<String, String>> {
+    val merged = LinkedHashMap<String, String>()
+    for ((name, value) in pairs) {
+        merged[name] = value
+    }
+    return merged.map { (name, value) -> name to value }
+}
+
 private fun collectCookies(
     domains: List<String>,
     requiredKeys: List<String>,
@@ -330,14 +346,18 @@ private fun collectCookies(
         Thread.sleep(400)
         val all = pairs.toList()
         if (all.isNotEmpty()) {
-            Log.d(TAG, "cookies for $domains: ${all.size} (keys=${all.map { it.first }.distinct()})")
+            val keyCounts = all.groupingBy { it.first }.eachCount()
+                .entries.joinToString(", ") { (name, count) -> if (count > 1) "$name×$count" else name }
+            Log.d(TAG, "cookies for $domains: ${all.size} (keys=$keyCounts)")
         }
-        val names = all.map { it.first }.toSet()
+        // 同名 Cookie 多份并存会使鉴权失败（issue #94）：按 name 去重后再拼接。
+        val deduped = mergeCookiesByName(all)
+        val names = deduped.map { it.first }.toSet()
         // 必需键全命中 OR anyOfKeys 任一命中；anyOfKeys 为空时仅看 requiredKeys
         val requiredOk = requiredKeys.all { names.contains(it) }
         val anyOk = anyOfKeys.isNotEmpty() && anyOfKeys.any { names.contains(it) }
         if (!requiredOk && !anyOk) return null
-        all.joinToString("; ") { "${it.first}=${it.second}" }
+        deduped.joinToString("; ") { "${it.first}=${it.second}" }
     }.getOrNull()
 }
 

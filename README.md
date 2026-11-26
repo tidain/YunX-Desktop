@@ -231,6 +231,7 @@ cd YunX-Desktop
 
 ## 友情链接
 - 云析的Docker社区移植版（基于本仓库修改，作为本仓库的下游分支）：[mu-zi-lee/YunX-Docker](https://github.com/mu-zi-lee/YunX-Docker)
+- 云析的Linux社区移植版（基于本仓库修改，作为本仓库的下游分支）：[suz20090912-hub/YunX-Linux](https://github.com/suz20090912-hub/YunX-Linux)
 
 ## 贡献者
 

@@ -59,6 +59,16 @@ import kotlin.coroutines.coroutineContext
 import kotlin.math.ceil
 import kotlin.math.min
 
+/**
+ * DASH 双轨合轨的临时产物文件名。
+ *
+ * 必须带 `.mp4` 后缀：`FfmpegMuxer` 以 `-c copy` 重封装时没有显式传 `-f`，
+ * ffmpeg 完全依赖输出扩展名推断封装格式；`dash_merged_1` 这类无后缀路径会被
+ * 直接判为 `-22 Invalid argument`，导致合轨必然失败。内置 Java 兜底合轨
+ * （[DashMuxer] 用 FileOutputStream 写出）与保存到下载目录都不依赖此后缀。
+ */
+internal fun dashMergedFileName(id: Long): String = "dash_merged_$id.mp4"
+
 /** 实时下载统计（用于 UI 展示速度/剩余时间/线程数） */
 data class DownloadStats(
     val speed: Long = 0L,        // 字节/秒
@@ -2676,7 +2686,7 @@ class DownloadManager(
         val mergeDir = AppContext.mergeDir.apply { mkdirs() }
         val videoFile = File(mergeDir, "dash_video_$id")
         val audioFile = File(mergeDir, "dash_audio_$id")
-        val mergedFile = File(mergeDir, "dash_merged_$id")
+        val mergedFile = File(mergeDir, dashMergedFileName(id))
         // 音轨头：内存表优先（入队/恢复时写入）；进程重启后从加密落库字段解回；都没有就不带头
         val audioHeaders = taskMergeAudioHeaders[id]
             ?: loadPersistedMergeAudioHeaders(task.mergeAudioHeadersJson)

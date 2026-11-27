@@ -166,6 +166,7 @@ tasks.register<JavaExec>("testInProcess") {
         "com.yunx.app.data.download.ChunkDownloaderDirectTest",
         "com.yunx.app.data.download.DownloadCacheMaintenanceTest",
         "com.yunx.app.data.download.DownloadManagerDirectIntegrationTest",
+        "com.yunx.app.data.download.DashMergedFileNameTest",
         "com.yunx.app.data.db.SecureAccountDaosTest",
         "com.yunx.app.data.storage.StorageMigratorTest",
         "com.yunx.app.data.security.DbKeyStoreTest",
